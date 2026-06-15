@@ -55,6 +55,7 @@ make secrets     # scaffold/auto-generate secrets.env
 make validate    # structural validation (fail-closed)
 make render      # regenerate the live configs
 make build       # build the local llama-cpp + llama-swap images
+make vllm-node   # clone + build the vLLM serving image(s) for SM121 (base+tf5)
 make doctor      # advisory on-disk model report
 make add-model HF_REPO=<org/model> [ADDARGS=--download]
 make download [MODEL=<name>]

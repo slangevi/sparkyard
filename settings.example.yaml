@@ -5,3 +5,10 @@
 llm_root: /home/user/LLMs        # host root for model weights
 repo_path: /home/user/sparkyard  # absolute path to this repo clone
 # home: /home/user               # optional; only if a mount uses {home}
+
+# Optional — vLLM image build (used by `make vllm-node`). Defaults shown; the
+# ref mirrors vllm/VLLM_NODE_PROVENANCE.md. Uncomment to override.
+# vllm:
+#   upstream: https://github.com/eugr/spark-vllm-docker
+#   clone_path: "{repo_path}/vllm/build/spark-vllm-docker"   # gitignored
+#   vllm_ref: 7852e50e4

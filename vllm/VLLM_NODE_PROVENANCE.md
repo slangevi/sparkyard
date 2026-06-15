@@ -24,8 +24,18 @@ only by the transformers v5 toolchain.
 
 ## Reproduce
 
+The one-command path (clones the repo, checks out the pinned ref, builds):
+
 ```bash
-cd vllm/build/spark-vllm-docker        # gitignored external clone of eugr/spark-vllm-docker
+make vllm-node                 # vllm-node:latest + vllm-node-tf5:latest (settings pin)
+make vllm-node VARIANT=mxfp4   # vllm-node-mxfp4:latest (tracks its own ref)
+make vllm-node VLLMARGS="--print"   # dry-run the plan
+```
+
+The pin lives in `settings.local.yaml` (`vllm.vllm_ref`, default `7852e50e4`);
+this file mirrors it. Under the hood `make vllm-node` runs, inside the clone:
+
+```bash
 ./build-and-copy.sh --vllm-ref 7852e50e4          # -> vllm-node:latest
 ./build-and-copy.sh --tf5 --vllm-ref 7852e50e4    # -> vllm-node-tf5:latest (Mamba/hybrid)
 ./build-and-copy.sh --exp-mxfp4                    # -> vllm-node-mxfp4:latest (GPT-OSS-120B)

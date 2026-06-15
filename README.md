@@ -23,10 +23,11 @@ gitignored `secrets.env`. Adding a model is one command.
 - The custom stack images, built on the box with `make build` (llama-cpp +
   llama-swap); Ollama and LiteLLM pull pinned upstream images automatically.
 - **For vLLM models only:** the `vllm-node` image, built from source for SM121.
-  This is a heavy one-time build (~30 min) via an external clone — see
-  [`vllm/VLLM_NODE_PROVENANCE.md`](vllm/VLLM_NODE_PROVENANCE.md). llama.cpp (GGUF)
-  models don't need it — they run on the `make build` images, so they're the
-  lighter first-run path.
+  Run `make vllm-node` — it clones the external build repo and builds the image
+  (a heavy one-time build, ~30 min; pin tracked in `settings.local.yaml` /
+  [`vllm/VLLM_NODE_PROVENANCE.md`](vllm/VLLM_NODE_PROVENANCE.md)). llama.cpp
+  (GGUF) models don't need it — they run on the `make build` images, so they're
+  the lighter first-run path.
 
 ## Quickstart
 
@@ -44,6 +45,7 @@ make init                 # copies settings.example.yaml -> settings.local.yaml,
 make render               # generate .env + llama-swap/config.yaml + LiteLLM/config.yaml
 make download             # fetch weights for models.yaml entries that carry hf_repo
 make build                # build the local llama-cpp + llama-swap images
+make vllm-node            # build vllm-node image(s) — only if you run vLLM models
 docker compose up -d      # start the stack
 ```
 
@@ -73,6 +75,7 @@ curl http://localhost:14000/v1/chat/completions \
 | `make validate` | Structurally validate `models.yaml` + settings (fail-closed). |
 | `make render` | Regenerate the live configs from the SSOT. |
 | `make build` | Build the local llama-cpp + llama-swap images. |
+| `make vllm-node [VARIANT=mxfp4] [VLLMARGS="--print"]` | Clone + build the vLLM serving image(s) for SM121 (base + tf5 by default). |
 | `make doctor` | Advisory on-disk report: which models' weights are present. |
 | `make add-model HF_REPO=<org/model> [ADDARGS=--download]` | Introspect a HF repo (vLLM or GGUF), append an entry to `models.yaml`, render, optionally download. |
 | `make download [MODEL=<name>]` | Fetch HF weights for `models.yaml` entries that carry `hf_repo`. |

@@ -1,6 +1,7 @@
 """Sparkyard generator CLI: `validate`, `render`, `doctor`, and `add-model` subcommands."""
 import argparse
 import sys
+import yaml
 
 from .render import load, RenderError, render_all
 from . import doctor as doctor_mod
@@ -37,10 +38,27 @@ def main(argv=None):
     dl = sub.add_parser("download", help="fetch HF weights for SSOT entries with hf_repo")
     dl.add_argument("--model", default=None, help="download only this model (by name); omit for all")
 
+    vn = sub.add_parser("vllm-node", help="clone + build the vllm-node serving image(s)")
+    vn.add_argument("--variant", choices=["base", "tf5", "mxfp4"], default=None,
+                    help="single variant to build; default builds base + tf5")
+    vn.add_argument("--vllm-ref", default=None, help="override the settings vllm_ref pin")
+    vn.add_argument("--print", dest="dry_run", action="store_true",
+                    help="print the resolved build plan and exit (no side effects)")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "add-model":
         return addmodel.run(args)
+
+    if args.cmd == "vllm-node":
+        from . import vllm_node
+        from .settings import Settings
+        try:
+            settings = Settings.load(args.settings)
+        except (OSError, KeyError, yaml.YAMLError) as e:
+            print(f"✗ {e}", file=sys.stderr)
+            return 1
+        return vllm_node.run(args, settings)
 
     try:
         settings, models = load(args.models, args.settings)

@@ -2,7 +2,7 @@
 VENV := tools/.venv
 PY   := $(VENV)/bin/python
 
-.PHONY: venv secrets validate render doctor test test-sh add-model download bench init lint build
+.PHONY: venv secrets validate render doctor test test-sh add-model download bench init lint build vllm-node
 
 venv: $(VENV)/.installed
 
@@ -51,6 +51,17 @@ download: venv
 	cd tools && .venv/bin/python -m sparkyard.cli \
 	  --models ../models.yaml --settings ../settings.local.yaml download \
 	  $(if $(MODEL),--model "$(MODEL)",)
+
+# Clone + build the externally-sourced vLLM serving image(s) for SM121 (GB10).
+# Default builds vllm-node + vllm-node-tf5 at the settings pin (~30 min).
+#   make vllm-node                       # base + tf5
+#   make vllm-node VARIANT=mxfp4         # GPT-OSS-120B variant (opt-in)
+#   make vllm-node VLLMARGS="--print"    # dry-run the plan
+#   make vllm-node VLLMARGS="--vllm-ref abc1234"
+vllm-node: venv
+	cd tools && .venv/bin/python -m sparkyard.cli \
+	  --settings ../settings.local.yaml vllm-node \
+	  $(if $(VARIANT),--variant $(VARIANT),) $(VLLMARGS)
 
 # Thin benchmark over the live gateway. MODE=quality (default) | speed.
 bench:

@@ -47,11 +47,10 @@ make build                # build the local llama-cpp + llama-swap images
 docker compose up -d      # start the stack
 ```
 
-A model only serves once its weights are on disk: `make download` fetches the
-vLLM example weights; GGUF weights are fetched by hand (see [Adding a
-model](#adding-a-model)). vLLM models also need the `vllm-node` image (see
-Prerequisites); the llama.cpp GGUF example is the lighter first run. `make
-doctor` reports which models' weights are present.
+A model only serves once its weights are on disk: `make download` fetches weights
+for both vLLM and GGUF entries (any entry with `hf_repo`). vLLM models also need
+the `vllm-node` image (see Prerequisites); the llama.cpp GGUF example is the
+lighter first run. `make doctor` reports which models' weights are present.
 
 The gateway requires auth — call it with your `LITELLM_MASTER_KEY` (from
 `secrets.env`) as the API key, or open the browser UI at `http://localhost:3000`
@@ -75,7 +74,7 @@ curl http://localhost:14000/v1/chat/completions \
 | `make render` | Regenerate the live configs from the SSOT. |
 | `make build` | Build the local llama-cpp + llama-swap images. |
 | `make doctor` | Advisory on-disk report: which models' weights are present. |
-| `make add-model HF_REPO=<org/model> [ADDARGS=--download]` | Introspect a HF repo, append a vLLM entry to `models.yaml`, render, optionally download. |
+| `make add-model HF_REPO=<org/model> [ADDARGS=--download]` | Introspect a HF repo (vLLM or GGUF), append an entry to `models.yaml`, render, optionally download. |
 | `make download [MODEL=<name>]` | Fetch HF weights for `models.yaml` entries that carry `hf_repo`. |
 | `make bench [MODE=speed]` | Benchmark each served model — quality (tool-eval-bench) or speed (llama-benchy). |
 | `make test` | Run the test suite (generator pytest + shell tests). |
@@ -148,10 +147,29 @@ make render && docker compose up -d llama-swap litellm
 
 The wizard introspects the HF repo, proposes a conservative vLLM entry (you
 confirm), appends it to `models.yaml`, records its `hf_repo`, and — with
-`--download` — fetches the weights. GGUF models are added to `models.yaml` by hand.
+`--download` — fetches the weights.
 
 `models.yaml` is gitignored and seeded from the committed `models.example.yaml`
 template by `make init`.
+
+### GGUF models
+
+`make add-model HF_REPO=<org/model-GGUF>` detects a GGUF repo and lets you pick a
+quant:
+
+- `make add-model HF_REPO=bartowski/Qwen2.5-3B-Instruct-GGUF ADDARGS="--gguf-file Q4_K_M"`
+  selects by substring; omit `--gguf-file` to get an interactive menu.
+- The wizard emits a `llamacpp` entry (GB10 flags `--no-mmap` + unified memory,
+  `--jinja`) and infers `ctx_size` from the repo's `config.json` when present,
+  else defaults to 8192 with a warning to adjust.
+- `ADDARGS="--gguf-file Q4_K_M --download"` (or a later `make download`) fetches
+  the chosen quant — including all shards of a multi-part quant.
+
+`make download` now fetches GGUF entries (any entry with `hf_repo`), not just
+vLLM ones. Assumes repos keep `.gguf` files at the repo root (the common layout);
+quants nested in subdirectories need manual placement.
+
+Note: `make add-model` places GGUF weights under `{llm_root}/gguf/<org>/<model>/`; the shipped `models.example.yaml` entry instead reuses the shared `{llm_root}/ollama/` tree, so hand-added and auto-added GGUFs may live in different directories.
 
 ## GB10 / unified-memory gotchas
 

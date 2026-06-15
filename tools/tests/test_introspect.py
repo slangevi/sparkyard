@@ -1,6 +1,7 @@
 import io
 import json
 import contextlib
+import pytest
 from sparkyard import introspect
 
 
@@ -63,3 +64,80 @@ def test_derive_entry_includes_hf_repo():
     assert is_gguf is False
     assert entry["hf_repo"] == "nvidia/Model-X"
     assert entry["path"] == "vllm/nvidia/Model-X"
+
+
+def test_fetch_metadata_config_optional_for_gguf_repo():
+    # opener that 404s config.json but serves siblings -> config is None, files present
+    def opener(url):
+        if url.endswith("/config.json"):
+            raise RuntimeError("404")
+        body = json.dumps({"siblings": [{"rfilename": "model-Q4_K_M.gguf"}]}).encode()
+        return contextlib.nullcontext(io.BytesIO(body))
+    config, files = introspect.fetch_repo_metadata("org/m", opener=opener)
+    assert config is None
+    assert files == ["model-Q4_K_M.gguf"]
+
+
+def test_fetch_metadata_raises_when_repo_unlistable():
+    def opener(url):
+        raise RuntimeError("network down")
+    with pytest.raises(introspect.IntrospectError):
+        introspect.fetch_repo_metadata("org/m", opener=opener)
+
+
+def test_is_gguf_repo():
+    assert introspect.is_gguf_repo(["a.safetensors", "model-Q4_K_M.gguf"]) is True
+    assert introspect.is_gguf_repo(["a.safetensors", "config.json"]) is False
+
+
+def test_infer_ctx_size_from_config():
+    assert introspect.infer_ctx_size({"max_position_embeddings": 32768}) == (32768, True)
+    assert introspect.infer_ctx_size({"text_config": {"max_position_embeddings": 8192}}) == (8192, True)
+
+
+def test_infer_ctx_size_fallback():
+    assert introspect.infer_ctx_size(None) == (8192, False)
+    assert introspect.infer_ctx_size({"model_type": "llama"}) == (8192, False)
+
+
+def test_is_gguf_repo_empty_list():
+    assert introspect.is_gguf_repo([]) is False
+
+
+def test_infer_ctx_size_custom_default():
+    assert introspect.infer_ctx_size(None, default=4096) == (4096, False)
+
+
+def test_derive_entry_raises_when_no_config_and_no_gguf():
+    import pytest
+    with pytest.raises(introspect.IntrospectError):
+        introspect.derive_entry("org/m", None, ["model.safetensors"])
+
+
+def test_derive_gguf_entry_shape_inferred_ctx():
+    entry, hints = introspect.derive_gguf_entry(
+        "Qwen/Qwen2.5-3B-Instruct-GGUF", "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+        {"max_position_embeddings": 32768})
+    assert entry["engine"] == "llamacpp"
+    assert entry["container"] == "llamacpp-qwen2-5-3b-instruct-gguf"
+    assert entry["hf_repo"] == "Qwen/Qwen2.5-3B-Instruct-GGUF"
+    assert entry["mount"] == "{llm_root}/gguf:/models/gguf"
+    assert entry["gguf"] == "gguf/Qwen/Qwen2.5-3B-Instruct-GGUF/Qwen2.5-3B-Instruct-Q4_K_M.gguf"
+    assert entry["ctx_size"] == 32768
+    assert entry["no_mmap"] is True and entry["unified_memory"] is True
+    assert entry["llamacpp_flags"] == ["--jinja"]
+    assert any("inferred" in h for h in hints)
+
+
+def test_derive_gguf_entry_fallback_warns():
+    entry, hints = introspect.derive_gguf_entry("bartowski/Foo-GGUF", "Foo-Q4_K_M.gguf", None)
+    assert entry["ctx_size"] == 8192
+    assert any("WARNING" in h for h in hints)
+
+
+def test_derive_gguf_entry_name_override_and_subdir_hint():
+    entry, hints = introspect.derive_gguf_entry(
+        "org/Repo", "Q4_K_M/Foo-Q4_K_M.gguf", None, name="MyModel")
+    assert entry["name"] == "MyModel"
+    assert entry["container"] == "llamacpp-mymodel"
+    assert any("subdir" in h.lower() for h in hints)

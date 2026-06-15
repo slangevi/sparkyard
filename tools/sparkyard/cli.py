@@ -30,6 +30,8 @@ def main(argv=None):
     am.add_argument("--dry-run", action="store_true")
     am.add_argument("--yes", action="store_true")
     am.add_argument("--download", action="store_true")
+    am.add_argument("--gguf-file", default=None,
+                    help="quant pattern to select from a GGUF repo (substring match)")
     _add_render_outputs(am)
 
     dl = sub.add_parser("download", help="fetch HF weights for SSOT entries with hf_repo")

@@ -20,27 +20,85 @@ def _read(url, opener):
 
 
 def fetch_repo_metadata(repo, opener=urllib.request.urlopen):
-    """Return (config: dict, files: list[str]). Raises IntrospectError if config.json is unreachable."""
-    try:
-        config = json.loads(_read(f"{HF}/{repo}/resolve/main/config.json", opener))
-    except Exception as e:
-        raise IntrospectError(f"could not fetch config.json for '{repo}': {e}")
+    """Return (config: dict|None, files: list[str]).
+
+    Siblings (the file list) are the primary signal — they tell us whether the
+    repo is GGUF. config.json is OPTIONAL: pure GGUF repos often lack one.
+    Raises IntrospectError only if the repo itself can't be listed."""
     try:
         info = json.loads(_read(f"{HF}/api/models/{repo}", opener))
         files = [s.get("rfilename", "") for s in info.get("siblings", [])]
+    except Exception as e:
+        raise IntrospectError(f"could not list files for '{repo}': {e}")
+    try:
+        config = json.loads(_read(f"{HF}/{repo}/resolve/main/config.json", opener))
     except Exception:
-        files = []
+        config = None
     return config, files
 
 
-def _slug(name):
-    return "vllm-" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+def is_gguf_repo(files):
+    """True if any sibling file is a .gguf weight."""
+    return any(f.endswith(".gguf") for f in files)
+
+
+def infer_ctx_size(config, default=8192):
+    """(ctx_size, inferred). Reads max_position_embeddings from config.json (or its
+    text_config) when available — the model's trained context. Else the conservative
+    default with inferred=False so the caller can warn."""
+    if config:
+        text_cfg = config.get("text_config") or {}
+        mpe = config.get("max_position_embeddings")
+        if mpe is None:
+            mpe = text_cfg.get("max_position_embeddings")
+        if mpe is not None:
+            return int(mpe), True
+    return default, False
+
+
+def _slug(name, prefix="vllm-"):
+    return prefix + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def derive_gguf_entry(repo, chosen_file, config, name=None):
+    """Return (entry, hints) for a llamacpp/GGUF model. `chosen_file` is the
+    repo-relative path of the first shard of the chosen quant."""
+    name = name or repo.split("/")[-1]
+    ctx, inferred = infer_ctx_size(config)
+    hints = []
+    if inferred:
+        hints.append(f"ctx_size {ctx} inferred from config.json; it drives llama.cpp "
+                     f"KV allocation — lower it to save memory.")
+    else:
+        hints.append(f"WARNING: couldn't infer context length (no config.json in repo); "
+                     f"defaulted ctx_size to {ctx} — raise toward the model's trained "
+                     f"context if needed.")
+    if "/" in chosen_file:
+        hints.append(f"'{chosen_file}' is in a subdirectory; v1 uses the repo-root GGUF "
+                     f"convention — verify the gguf/mount path or place the file manually.")
+    entry = {
+        "name": name,
+        "engine": "llamacpp",
+        "container": _slug(name, "llamacpp-"),
+        "hf_repo": repo,
+        "mount": "{llm_root}/gguf:/models/gguf",
+        "gguf": f"gguf/{repo}/{chosen_file}",
+        "ctx_size": ctx,
+        "parallel": 4,
+        "no_mmap": True,
+        "unified_memory": True,
+        "llamacpp_flags": ["--jinja"],
+    }
+    return entry, hints
 
 
 def derive_entry(repo, config, files, name=None):
     """Return (entry: dict|None, hints: list[str], is_gguf: bool)."""
-    if any(f.endswith(".gguf") for f in files):
+    if is_gguf_repo(files):
         return None, [], True
+
+    if config is None:
+        raise IntrospectError(f"'{repo}': no config.json and no .gguf files — can't introspect")
 
     name = name or repo.split("/")[-1]
     text_cfg = config.get("text_config") or {}

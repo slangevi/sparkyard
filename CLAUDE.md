@@ -35,7 +35,11 @@ with Jinja templates in `tools/sparkyard/templates/`. Driven by the root
 
 - `models.yaml` entries have an `engine:` of `vllm` or `llamacpp` (the only two —
   validation is fail-closed). Each carries an optional `hf_repo` so `make
-  download` / `make add-model` can fetch it.
+  download` / `make add-model` can fetch it. `make add-model` supports both vLLM
+  (safetensors) and GGUF repos: for a GGUF repo it detects the type, presents a
+  quant picker (`--gguf-file <pattern>` or an interactive numbered menu), emits a
+  `llamacpp` entry with GB10 flags, and infers `ctx_size` from `config.json`.
+  `make download` fetches weights for both engines.
 - `{placeholder}` tokens (e.g. `{llm_root}`, `{repo_path}`) are resolved from
   settings at render time; shell `${VAR}` macros are preserved verbatim
   (negative-lookbehind in the resolver).

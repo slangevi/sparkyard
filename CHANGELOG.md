@@ -7,6 +7,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 sparkyard is an independent reimplementation; see [`CREDITS.md`](CREDITS.md) for
 the prior work that inspired it.
 
+## [Unreleased]
+
+### Added
+- `make add-model` accepts GGUF repos: detects them, picks a quant
+  (`--gguf-file <pattern>` or an interactive menu), emits a `llamacpp` entry, and
+  can download the chosen quant (shard-aware) via `--download`.
+- `make download` fetches GGUF entries (previously skipped), including multi-part
+  shard families; `ctx_size` is inferred from `config.json` when available.
+
 ## [1.0.0] - 2026-06-15
 
 First public release: a single-source-of-truth, multi-engine LLM stack for the

@@ -1,0 +1,3 @@
+llm_root: /data/LLMs
+repo_path: /repo
+home: /home/acme

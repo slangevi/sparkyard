@@ -1,0 +1,83 @@
+defaults:
+  vllm:
+    image: vllm-node:latest
+    gmem_min: 0.12
+    gmem_max: 0.85
+    safety_gib: 6
+    ttl: 3600
+    ready_timeout: 1800
+    check_endpoint: "/health"
+  llamacpp:
+    image: "sparkyard/llama-cpp-spark:latest"
+    ttl: 3600
+    ready_timeout: 600
+    check_endpoint: "/health"
+    n_gpu_layers: 99
+    parallel: 4
+
+models:
+  - name: Nemotron-3-Nano-4B-FP8
+    engine: vllm
+    tier: S
+    path: vllm/Nvidia/Nemotron-3-Nano-4B-FP8
+    container: vllm-nano4b
+    max_model_len: 8192
+    max_num_seqs: 10
+    kv_dtype_bytes: 1
+    gmem: { min: 0.10, max: 0.40 }
+    safety_gib: 2
+    ttl: 300
+    ready_timeout: 300
+    chat_template: vllm/Nvidia/Nemotron-3-Nano-4B-FP8/chat_template-tool-strict.jinja
+    vllm_flags:
+      - --kv-cache-dtype fp8
+      - --enforce-eager
+      - --trust-remote-code
+      - --load-format fastsafetensors
+      - --enable-prefix-caching
+    litellm:
+      drop_params: true
+
+  - name: Qwen3.6-35B-A3B-FP8
+    engine: vllm
+    tier: M
+    path: vllm/Alibaba/Qwen3.6-35B-A3B-FP8
+    container: vllm-qwen3.6-35b
+    max_model_len: 262144
+    max_num_seqs: 20
+    kv_dtype_bytes: 1
+    gmem: { min: 0.55, max: 0.71, override: 0.7069 }
+    safety_gib: 4
+    ttl: 600
+    ready_timeout: 600
+    extra_docker_args: "-e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True -e OMP_NUM_THREADS=4"
+    chat_template: vllm/Alibaba/Qwen3.6-35B-A3B-FP8/chat_template-tool-strict.jinja
+    aliases: [qwen3.6-35b-a3b]
+    vllm_flags:
+      - --max-num-batched-tokens 32768
+      - --kv-cache-dtype fp8
+      - --enable-prefix-caching
+    litellm:
+      drop_params: true
+      include_reasoning: true
+      supports_reasoning: true
+      merge_reasoning_content_in_choices: true
+      max_tokens: 4096
+
+  - name: Qwen3.6-27B-uncensored-heretic-NVFP4
+    engine: llamacpp
+    tier: S
+    gguf: ollama/Alibaba/Qwen3.6-27B-heretic/model-NVFP4-MLP-Only.gguf
+    mount: "{llm_root}/ollama:/models/ollama"
+    container: llamacpp-qwen27b
+    ctx_size: 65536
+    parallel: 2
+    unified_memory: false
+    chat_template:
+    llamacpp_flags:
+      - --jinja
+      - --reasoning-budget 1024
+    litellm:
+      include_reasoning: true
+      supports_reasoning: true
+      merge_reasoning_content_in_choices: true

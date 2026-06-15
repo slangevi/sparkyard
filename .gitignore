@@ -1,0 +1,49 @@
+# --- Security & Secrets ---
+.env
+.env~
+LiteLLM/config.yaml
+llama-swap/config.yaml
+# Sparkyard: single secrets home + machine settings (never committed)
+# Anchored to repo root so identically-named test fixtures aren't ignored.
+/secrets.env
+/secrets.env~
+/secrets.webui.env
+/secrets.db.env
+/secrets.litellm.env
+/settings.local.yaml
+/models.yaml
+# Sparkyard: generated compose env preview (P1) and live generated env (P3)
+/.env.sparkyard
+# Python tooling
+tools/.venv/
+/venv/
+**/__pycache__/
+.pytest_cache/
+openclaw/
+
+# --- Build Artifacts & Output ---
+vllm/build/
+test-results/
+FORUM_UPDATE.md
+probe-models.sh
+
+# --- IDE & Tool Config ---
+.claude/
+*.code-workspace
+
+# --- Design specs / plans (kept local, never committed) ---
+docs/superpowers/
+
+# --- Backup/Temp Files ---
+*~
+*.swp
+*.log
+*.bak*
+.DS_Store
+*.gemini.created
+# VSCode / IDE temp files with control-character names:
+$'\001'*
+*.prebak
+
+# --- Local benchmark DB (untracked; was committed pre-P6) ---
+/data/benchmarks.sqlite

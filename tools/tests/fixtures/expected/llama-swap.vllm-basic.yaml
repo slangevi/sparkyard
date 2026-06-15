@@ -1,0 +1,22 @@
+  Nemotron-3-Nano-4B-FP8:
+    ttl: 300
+    readyTimeout: 300
+    checkEndpoint: "/health"
+    cmd: >
+      env
+      MODEL_PATH=/models/vllm/Nvidia/Nemotron-3-Nano-4B-FP8
+      MODEL_HOST_PATH=/models/vllm/Nvidia/Nemotron-3-Nano-4B-FP8
+      CONTAINER_NAME=vllm-nano4b-${PORT}
+      IMAGE=vllm-node:latest
+      PORT=${PORT} HOST=${host}
+      MAX_MODEL_LEN=8192 MAX_NUM_SEQS=10 KV_DTYPE_BYTES=1
+      GMEM_MIN=0.1 GMEM_MAX=0.4 SAFETY_GIB=2
+      python3 /app/scripts/launch.py
+      --served-model-name Nemotron-3-Nano-4B-FP8
+      --chat-template /models/vllm/Nvidia/Nemotron-3-Nano-4B-FP8/chat_template-tool-strict.jinja
+      --kv-cache-dtype fp8
+      --enforce-eager
+      --trust-remote-code
+      --load-format fastsafetensors
+      --enable-prefix-caching
+    cmdStop: "docker stop vllm-nano4b-${PORT}"

@@ -1,0 +1,7 @@
+# Sparkyard machine settings — copy to `settings.local.yaml` and edit.
+# settings.local.yaml is gitignored (machine-specific paths).
+# These values fill the {placeholders} used in models.yaml and templates.
+
+llm_root: /home/user/LLMs        # host root for model weights
+repo_path: /home/user/sparkyard  # absolute path to this repo clone
+# home: /home/user               # optional; only if a mount uses {home}

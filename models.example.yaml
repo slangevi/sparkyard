@@ -1,0 +1,69 @@
+# ==============================================================================
+# Sparkyard — EXAMPLE model definitions (public, downloadable).
+# `make init` copies this to models.yaml (gitignored) on first run; edit that.
+# `make render` then generates llama-swap/config.yaml + LiteLLM/config.yaml.
+#
+# Placeholders {llm_root} {repo_path} {home} are filled from settings.local.yaml
+# at render time. Paths under `path:`/`gguf:` are relative to the in-container
+# /models mount. `vllm_flags`/`llamacpp_flags` pass through verbatim (one
+# flag+value per list item). ${PORT}/${host} are llama-swap macros.
+#
+# vLLM models need the externally-built `vllm-node:latest` image
+# (see vllm/VLLM_NODE_PROVENANCE.md). llama.cpp models use the locally-built
+# sparkyard/llama-cpp-spark:latest image (`make build`).
+# ==============================================================================
+
+defaults:
+  vllm:
+    image: vllm-node:latest
+    gmem_min: 0.12
+    gmem_max: 0.85
+    safety_gib: 6
+    ttl: 3600
+    ready_timeout: 1800
+    check_endpoint: "/health"
+  llamacpp:
+    image: sparkyard/llama-cpp-spark:latest
+    ttl: 3600
+    ready_timeout: 600
+    check_endpoint: "/health"
+    n_gpu_layers: 99
+    parallel: 4
+
+models:
+  # ---- vLLM (safetensors) ----
+  - name: Qwen2.5-3B-Instruct
+    engine: vllm
+    container: vllm-qwen25-3b
+    hf_repo: Qwen/Qwen2.5-3B-Instruct
+    path: vllm/Qwen/Qwen2.5-3B-Instruct
+    max_model_len: 32768
+    max_num_seqs: 8
+    kv_dtype_bytes: 2
+    litellm:
+      max_tokens: 8192
+
+  - name: Qwen2.5-Coder-7B-Instruct
+    engine: vllm
+    container: vllm-qwen25-coder-7b
+    hf_repo: Qwen/Qwen2.5-Coder-7B-Instruct
+    path: vllm/Qwen/Qwen2.5-Coder-7B-Instruct
+    max_model_len: 32768
+    max_num_seqs: 8
+    kv_dtype_bytes: 2
+    litellm:
+      max_tokens: 8192
+
+  # ---- llama.cpp (GGUF) ----
+  - name: Qwen2.5-3B-Instruct-GGUF
+    engine: llamacpp
+    container: llamacpp-qwen25-3b
+    hf_repo: bartowski/Qwen2.5-3B-Instruct-GGUF
+    mount: "{llm_root}/ollama:/models/ollama"
+    gguf: ollama/bartowski/Qwen2.5-3B-Instruct-GGUF/Qwen2.5-3B-Instruct-Q4_K_M.gguf
+    ctx_size: 32768
+    parallel: 4
+    no_mmap: true
+    unified_memory: true
+    llamacpp_flags:
+      - --jinja

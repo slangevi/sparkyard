@@ -130,7 +130,7 @@ services:
   # The 15-second startup delay gives the GPU driver time to settle
   # before Ollama tries to claim VRAM — avoids init-time OOM on GB10.
   ollama:
-    image: ollama/ollama@sha256:05b6fe5143ed006d6d4abd39bdd575f962a5822bdf81e6fbb5e6894eb984ab9c
+    image: ollama/ollama:latest@sha256:05b6fe5143ed006d6d4abd39bdd575f962a5822bdf81e6fbb5e6894eb984ab9c
     container_name: ollama
     restart: unless-stopped
     ipc: host

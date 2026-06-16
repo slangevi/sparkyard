@@ -19,7 +19,8 @@ gitignored `secrets.env`. Adding a model is one command.
 
 - An NVIDIA DGX Spark (GB10 / SM121, CUDA 13.1) with Docker + the NVIDIA
   Container Toolkit (the `nvidia` runtime).
-- Python 3 (for the generator; `make venv` creates a local virtualenv under `tools/.venv`).
+- Python 3 (for the generator; `make venv` creates a local virtualenv under
+  `tools/.venv` and installs a `sparkyard` console command into it).
 - The custom stack images, built on the box with `make build` (llama-cpp +
   llama-swap); Ollama and LiteLLM pull pinned upstream images automatically.
 - **For vLLM models only:** the `vllm-node` image, built from source for SM121.
@@ -69,8 +70,8 @@ curl http://localhost:14000/v1/chat/completions \
 
 | Command | What it does |
 |---|---|
-| `make init` | First-run onboarding (idempotent): seed `settings.local.yaml`, `models.yaml`, and `secrets.env`. |
-| `make venv` | Create `tools/.venv` and install the generator's deps (auto-run by the targets below). |
+| `make init` | First-run onboarding (idempotent): seed `settings.local.yaml`, `models.yaml`, and `secrets.env`, build the `tools/.venv`, and (if `uv` or `pipx` is present) offer to install a global `sparkyard`. |
+| `make venv` | Create `tools/.venv`, install the generator, and put a `sparkyard` console command in it (auto-run by the targets below). |
 | `make secrets` | Scaffold `secrets.env` and auto-generate the random secrets. |
 | `make validate` | Structurally validate `models.yaml` + settings (fail-closed). |
 | `make render` | Regenerate the live configs from the SSOT. |
@@ -82,6 +83,16 @@ curl http://localhost:14000/v1/chat/completions \
 | `make bench [MODE=speed]` | Benchmark each served model — quality (tool-eval-bench) or speed (llama-benchy). |
 | `make test` | Run the test suite (generator pytest + shell tests). |
 | `make lint` | Shellcheck the shell scripts (advisory if shellcheck isn't installed). |
+
+`make venv` installs the generator and a `sparkyard` console command into
+`tools/.venv`. The `make` generator targets call it; you can also run
+`tools/.venv/bin/sparkyard <cmd>` directly, or install it globally with `uv tool install ./tools` (or `pipx install ./tools`)
+for a `sparkyard` on your PATH (handy for agents/scripts). `sparkyard render`,
+`sparkyard validate`, etc. are equivalent to the matching `make` targets and
+work from anywhere in the checkout — the command autodiscovers the repo root via
+the committed `models.example.yaml` marker (pass `--models`/`--settings` to
+override). `make init` builds this venv for you and, when `uv` or `pipx` is installed,
+offers to set up the global command interactively.
 
 ## Architecture
 

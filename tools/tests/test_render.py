@@ -199,6 +199,7 @@ def test_json_and_macro_flags_round_trip():
 def test_cli_render_default_env_out_is_dotenv(tmp_path):
     import shutil
     shutil.copy(MODELS, tmp_path / "models.yaml")
+    shutil.copy(MODELS, tmp_path / "models.example.yaml")   # marker for repo-root autodiscovery
     shutil.copy(SETTINGS, tmp_path / "settings.local.yaml")
     tools_dir = os.path.dirname(os.path.dirname(__file__))  # tools/
     r = subprocess.run(

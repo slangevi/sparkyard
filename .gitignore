@@ -16,6 +16,8 @@ llama-swap/config.yaml
 /.env.sparkyard
 # Python tooling
 tools/.venv/
+tools/*.egg-info/
+tools/build/
 /venv/
 **/__pycache__/
 .pytest_cache/

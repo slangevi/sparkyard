@@ -1,5 +1,6 @@
 """Sparkyard generator CLI: `validate`, `render`, `doctor`, and `add-model` subcommands."""
 import argparse
+import os
 import sys
 import yaml
 
@@ -8,16 +9,53 @@ from . import doctor as doctor_mod
 from . import addmodel
 
 
+MARKER = "models.example.yaml"
+_PATH_DEFAULTS = {
+    "models": "models.yaml",
+    "settings": "settings.local.yaml",
+    "llama_swap_out": "llama-swap/config.yaml",
+    "litellm_out": "LiteLLM/config.yaml",
+    "env_out": ".env",
+}
+
+
+def _find_repo_root(start=None):
+    """Walk up from `start` (or cwd) to the dir containing MARKER; None if not found."""
+    d = os.path.abspath(start or os.getcwd())
+    while True:
+        if os.path.isfile(os.path.join(d, MARKER)):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def _resolve_paths(args):
+    """Fill any unset (None) path arg with <repo_root>/<default>. Returns an
+    error string if a default is needed but no checkout is found, else None."""
+    need = [a for a in _PATH_DEFAULTS if hasattr(args, a) and getattr(args, a) is None]
+    if not need:
+        return None
+    root = _find_repo_root()
+    if root is None:
+        return (f"could not locate a sparkyard checkout (no {MARKER} at or above "
+                f"{os.getcwd()}); pass --models/--settings explicitly")
+    for a in need:
+        setattr(args, a, os.path.join(root, _PATH_DEFAULTS[a]))
+    return None
+
+
 def _add_render_outputs(p):
-    p.add_argument("--llama-swap-out", default="llama-swap/config.yaml")
-    p.add_argument("--litellm-out", default="LiteLLM/config.yaml")
-    p.add_argument("--env-out", default=".env")
+    p.add_argument("--llama-swap-out", default=None)
+    p.add_argument("--litellm-out", default=None)
+    p.add_argument("--env-out", default=None)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="sparkyard")
-    parser.add_argument("--models", default="models.yaml")
-    parser.add_argument("--settings", default="settings.local.yaml")
+    parser.add_argument("--models", default=None)
+    parser.add_argument("--settings", default=None)
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("validate", help="validate models.yaml + settings")
     sub.add_parser("doctor", help="advisory on-disk report (never blocks render)")
@@ -46,6 +84,11 @@ def main(argv=None):
                     help="print the resolved build plan and exit (no side effects)")
 
     args = parser.parse_args(argv)
+
+    err = _resolve_paths(args)
+    if err:
+        print(f"✗ {err}", file=sys.stderr)
+        return 2
 
     if args.cmd == "add-model":
         return addmodel.run(args)

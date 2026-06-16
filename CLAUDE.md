@@ -33,6 +33,16 @@ Pipeline: `placeholders` → `settings` → `model` → `validate` → `render` 
 with Jinja templates in `tools/sparkyard/templates/`. Driven by the root
 `Makefile`; the venv is at `tools/.venv` (`make venv`).
 
+`make venv` editable-installs the package (`tools/pyproject.toml`) and a
+`sparkyard` console entry point into `tools/.venv`. The
+`make` generator targets call `tools/.venv/bin/sparkyard <cmd>`; `python -m
+sparkyard.cli <cmd>` still works too. The command autodiscovers the repo root by
+walking up to the committed `models.example.yaml` marker, so it runs from any
+subdir (explicit `--models`/`--settings` override; fail-closed if no checkout is
+found). `make init` also builds the venv eagerly and, when `uv` or `pipx` is present,
+offers to install the global `sparkyard` (interactive prompt on a TTY; a
+one-line tip otherwise — never blocks unattended runs).
+
 - `models.yaml` entries have an `engine:` of `vllm` or `llamacpp` (the only two —
   validation is fail-closed). Each carries an optional `hf_repo` so `make
   download` / `make add-model` can fetch it. `make add-model` supports both vLLM

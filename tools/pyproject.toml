@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sparkyard"
+version = "1.0.0"
+description = "SSOT-driven multi-engine LLM stack generator for the NVIDIA DGX Spark"
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML==6.0.2",
+    "Jinja2==3.1.4",
+    "huggingface_hub==1.19.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.3"]
+
+[project.scripts]
+sparkyard = "sparkyard.cli:main"
+
+[tool.setuptools]
+packages = ["sparkyard"]
+
+[tool.setuptools.package-data]
+sparkyard = ["templates/*.j2"]

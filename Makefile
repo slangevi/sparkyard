@@ -6,32 +6,26 @@ PY   := $(VENV)/bin/python
 
 venv: $(VENV)/.installed
 
-$(VENV)/.installed: tools/requirements.txt
+$(VENV)/.installed: tools/pyproject.toml
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip install -q -r tools/requirements.txt
+	$(VENV)/bin/pip install -q -e "./tools[dev]"
 	touch $@
 
 secrets:
 	bash scripts/gen-secrets.sh
 
 validate: venv
-	cd tools && .venv/bin/python -m sparkyard.cli \
-	  --models ../models.yaml --settings ../settings.local.yaml validate
+	tools/.venv/bin/sparkyard validate
 
 # Build the locally-customized images (llama-cpp + llama-swap) on this box.
 build:
 	docker compose build
 
 render: venv
-	cd tools && .venv/bin/python -m sparkyard.cli \
-	  --models ../models.yaml --settings ../settings.local.yaml render \
-	  --llama-swap-out ../llama-swap/config.yaml \
-	  --litellm-out ../LiteLLM/config.yaml \
-	  --env-out ../.env
+	tools/.venv/bin/sparkyard render
 
 doctor: venv
-	cd tools && .venv/bin/python -m sparkyard.cli \
-	  --models ../models.yaml --settings ../settings.local.yaml doctor
+	tools/.venv/bin/sparkyard doctor
 
 test: venv
 	cd tools && .venv/bin/python -m pytest -q
@@ -42,15 +36,10 @@ test-sh:
 	@for t in scripts/tests/*.sh; do echo "# $$t"; bash "$$t" || exit 1; done
 
 add-model: venv
-	cd tools && .venv/bin/python -m sparkyard.cli \
-	  --models ../models.yaml --settings ../settings.local.yaml add-model "$(HF_REPO)" \
-	  --llama-swap-out ../llama-swap/config.yaml --litellm-out ../LiteLLM/config.yaml \
-	  --env-out ../.env $(ADDARGS)
+	tools/.venv/bin/sparkyard add-model "$(HF_REPO)" $(ADDARGS)
 
 download: venv
-	cd tools && .venv/bin/python -m sparkyard.cli \
-	  --models ../models.yaml --settings ../settings.local.yaml download \
-	  $(if $(MODEL),--model "$(MODEL)",)
+	tools/.venv/bin/sparkyard download $(if $(MODEL),--model "$(MODEL)",)
 
 # Clone + build the externally-sourced vLLM serving image(s) for SM121 (GB10).
 # Default builds vllm-node + vllm-node-tf5 at the settings pin (~30 min).
@@ -59,8 +48,7 @@ download: venv
 #   make vllm-node VLLMARGS="--print"    # dry-run the plan
 #   make vllm-node VLLMARGS="--vllm-ref abc1234"
 vllm-node: venv
-	cd tools && .venv/bin/python -m sparkyard.cli \
-	  --settings ../settings.local.yaml vllm-node \
+	tools/.venv/bin/sparkyard vllm-node \
 	  $(if $(VARIANT),--variant $(VARIANT),) $(VLLMARGS)
 
 # Thin benchmark over the live gateway. MODE=quality (default) | speed.
@@ -74,12 +62,16 @@ init:
 	@test -f models.yaml || { cp models.example.yaml models.yaml; \
 	  echo "→ created models.yaml from models.example.yaml (edit it / add your models)"; }
 	@$(MAKE) secrets
+	@$(MAKE) venv
+	@bash scripts/offer-global-install.sh
 	@echo ""
 	@echo "Next steps:"
 	@echo "  1. Edit settings.local.yaml (paths) + models.yaml (your models) + secrets.env (HF_TOKEN)"
 	@echo "  2. make render          # generate .env + llama-swap/LiteLLM configs"
 	@echo "  3. make build           # build the local llama-cpp + llama-swap images"
 	@echo "  4. docker compose up -d"
+	@echo ""
+	@echo "The generator is installed at tools/.venv/bin/sparkyard (or run it via make)."
 
 # Shellcheck every tracked *.sh when shellcheck is present; advisory no-op otherwise.
 lint:

@@ -42,3 +42,19 @@ def test_vllm_node_handles_malformed_settings_yaml(tmp_path, capsys):
     rc = cli.main(["--settings", str(bad), "vllm-node", "--print"])
     assert rc == 1
     assert "✗" in capsys.readouterr().err
+
+
+def test_update_dispatches_with_check(monkeypatch, tmp_path):
+    import sparkyard.update as upd
+    captured = {}
+    def fake_run(root, settings, *, check, deps=None):
+        captured["root"] = root; captured["check"] = check
+        return 0
+    monkeypatch.setattr(upd, "run", fake_run)
+    # a discoverable checkout so autodiscovery resolves
+    (tmp_path / "models.example.yaml").write_text("models: []\n")
+    (tmp_path / "settings.local.yaml").write_text("llm_root: /x\nrepo_path: /y\n")
+    monkeypatch.chdir(tmp_path)
+    from sparkyard import cli
+    assert cli.main(["update", "--check"]) == 0
+    assert captured["check"] is True and captured["root"] == str(tmp_path)

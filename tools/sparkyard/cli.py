@@ -83,6 +83,10 @@ def main(argv=None):
     vn.add_argument("--print", dest="dry_run", action="store_true",
                     help="print the resolved build plan and exit (no side effects)")
 
+    up = sub.add_parser("update", help="check for + apply upstream component updates")
+    up.add_argument("--check", action="store_true",
+                    help="dry run: report only, make no changes and no pull/build")
+
     args = parser.parse_args(argv)
 
     err = _resolve_paths(args)
@@ -102,6 +106,20 @@ def main(argv=None):
             print(f"✗ {e}", file=sys.stderr)
             return 1
         return vllm_node.run(args, settings)
+
+    if args.cmd == "update":
+        from . import update
+        from .settings import Settings
+        root = _find_repo_root()
+        if root is None:
+            print(f"✗ could not locate a sparkyard checkout (no {MARKER})", file=sys.stderr)
+            return 2
+        try:
+            settings = Settings.load(args.settings)
+        except (OSError, KeyError, yaml.YAMLError) as e:
+            print(f"✗ {e}", file=sys.stderr)
+            return 1
+        return update.run(root, settings, check=args.check)
 
     try:
         settings, models = load(args.models, args.settings)

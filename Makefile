@@ -2,7 +2,7 @@
 VENV := tools/.venv
 PY   := $(VENV)/bin/python
 
-.PHONY: venv secrets validate render doctor test test-sh add-model download bench init lint build vllm-node
+.PHONY: venv secrets validate render doctor test test-sh add-model download bench init lint build vllm-node update
 
 venv: $(VENV)/.installed
 
@@ -40,6 +40,12 @@ add-model: venv
 
 download: venv
 	tools/.venv/bin/sparkyard download $(if $(MODEL),--model "$(MODEL)",)
+
+# Check for + apply upstream component updates (bumps pins, pulls/builds; leaves a diff).
+#   make update                       # apply
+#   make update UPDATEARGS=--check    # dry-run report
+update: venv
+	tools/.venv/bin/sparkyard update $(UPDATEARGS)
 
 # Clone + build the externally-sourced vLLM serving image(s) for SM121 (GB10).
 # Default builds vllm-node + vllm-node-tf5 at the settings pin (~30 min).

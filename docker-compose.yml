@@ -3,19 +3,20 @@
 #
 # Parameterized by:
 #   .env         — generated, NON-secret compose vars (LLM_ROOT_PATH,
-#                  REPO_CONFIG_PATH). Produced by `make render`.
-#   secrets.env  — gitignored; the single secret store. `make secrets` projects
-#                  least-privilege subsets (secrets.db.env / secrets.litellm.env /
-#                  secrets.webui.env) that each service reads via `env_file:`.
+#                  REPO_CONFIG_PATH). Produced by `sparkyard render`.
+#   secrets.env  — gitignored; the single secret store. `sparkyard secrets`
+#                  projects least-privilege subsets (secrets.db.env /
+#                  secrets.litellm.env / secrets.webui.env) read via `env_file:`.
 # Model lists in the inference services are generated from models.yaml — do not
 # hand-edit llama-swap/config.yaml or LiteLLM/config.yaml.
 #
-# First run:
-#   make init               # seed settings.local.yaml + models.yaml + secrets.env
+# First run (sparkyard is the primary interface; `make <cmd>` aliases also work):
+#   uv tool install ./tools  # global `sparkyard` (or: pipx install ./tools)
+#   sparkyard init           # seed settings.local.yaml + models.yaml + secrets.env
 #   # edit settings.local.yaml (paths) + models.yaml + secrets.env (HF_TOKEN)
-#   make render             # generate .env + llama-swap/LiteLLM configs
-#   make build              # build the local llama-cpp + llama-swap images
-#   docker compose up -d
+#   sparkyard render         # generate .env + llama-swap/LiteLLM configs
+#   sparkyard build          # build the local llama-cpp + llama-swap images
+#   sparkyard start          # docker compose up -d
 # ==============================================================================
 
 

@@ -87,6 +87,15 @@ def main(argv=None):
     up.add_argument("--check", action="store_true",
                     help="dry run: report only, make no changes and no pull/build")
 
+    sub.add_parser("init", help="seed settings/models/secrets for first run")
+    sub.add_parser("secrets", help="scaffold + generate secrets.env")
+    sub.add_parser("build", help="build the local llama-cpp + llama-swap images")
+    sub.add_parser("start", help="start the stack (docker compose up -d)")
+    sub.add_parser("stop", help="stop the stack (docker compose down)")
+    b = sub.add_parser("bench", help="benchmark the served models")
+    b.add_argument("--mode", choices=["quality", "speed"], default=None)
+    b.add_argument("--base-url", default=None)
+
     args = parser.parse_args(argv)
 
     err = _resolve_paths(args)
@@ -120,6 +129,16 @@ def main(argv=None):
             print(f"✗ {e}", file=sys.stderr)
             return 1
         return update.run(root, settings, check=args.check)
+
+    if args.cmd in ("init", "secrets", "build", "start", "stop", "bench"):
+        from . import ops
+        root = _find_repo_root()
+        if root is None:
+            print(f"✗ could not locate a sparkyard checkout (no {MARKER})", file=sys.stderr)
+            return 2
+        if args.cmd == "bench":
+            return ops.bench(root, args.mode, args.base_url)
+        return getattr(ops, args.cmd)(root)
 
     try:
         settings, models = load(args.models, args.settings)

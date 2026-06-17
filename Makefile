@@ -2,7 +2,7 @@
 VENV := tools/.venv
 PY   := $(VENV)/bin/python
 
-.PHONY: venv secrets validate render doctor test test-sh add-model download bench init lint build vllm-node update
+.PHONY: venv secrets validate render doctor test test-sh add-model download bench init lint build vllm-node update start stop
 
 venv: $(VENV)/.installed
 
@@ -11,15 +11,21 @@ $(VENV)/.installed: tools/pyproject.toml
 	$(VENV)/bin/pip install -q -e "./tools[dev]"
 	touch $@
 
-secrets:
-	bash scripts/gen-secrets.sh
+secrets: venv
+	tools/.venv/bin/sparkyard secrets
 
 validate: venv
 	tools/.venv/bin/sparkyard validate
 
 # Build the locally-customized images (llama-cpp + llama-swap) on this box.
-build:
-	docker compose build
+build: venv
+	tools/.venv/bin/sparkyard build
+
+start: venv
+	tools/.venv/bin/sparkyard start
+
+stop: venv
+	tools/.venv/bin/sparkyard stop
 
 render: venv
 	tools/.venv/bin/sparkyard render
@@ -58,26 +64,14 @@ vllm-node: venv
 	  $(if $(VARIANT),--variant $(VARIANT),) $(VLLMARGS)
 
 # Thin benchmark over the live gateway. MODE=quality (default) | speed.
-bench:
-	MODE=$(MODE) BASE_URL=$(BASE_URL) bash scripts/bench.sh
+bench: venv
+	tools/.venv/bin/sparkyard bench $(if $(MODE),--mode $(MODE),) $(if $(BASE_URL),--base-url $(BASE_URL),)
 
-# One-command onboarding for the SSOT flow. Idempotent — safe to re-run.
-init:
-	@test -f settings.local.yaml || { cp settings.example.yaml settings.local.yaml; \
-	  echo "→ created settings.local.yaml (edit it to set your paths)"; }
-	@test -f models.yaml || { cp models.example.yaml models.yaml; \
-	  echo "→ created models.yaml from models.example.yaml (edit it / add your models)"; }
-	@$(MAKE) secrets
-	@$(MAKE) venv
+# One-command onboarding. `sparkyard init` seeds configs + secrets; the make
+# path also builds the venv and offers a global install.
+init: venv
+	@tools/.venv/bin/sparkyard init
 	@bash scripts/offer-global-install.sh
-	@echo ""
-	@echo "Next steps:"
-	@echo "  1. Edit settings.local.yaml (paths) + models.yaml (your models) + secrets.env (HF_TOKEN)"
-	@echo "  2. make render          # generate .env + llama-swap/LiteLLM configs"
-	@echo "  3. make build           # build the local llama-cpp + llama-swap images"
-	@echo "  4. docker compose up -d"
-	@echo ""
-	@echo "The generator is installed at tools/.venv/bin/sparkyard (or run it via make)."
 
 # Shellcheck every tracked *.sh when shellcheck is present; advisory no-op otherwise.
 lint:

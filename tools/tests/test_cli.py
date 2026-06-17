@@ -58,3 +58,26 @@ def test_update_dispatches_with_check(monkeypatch, tmp_path):
     from sparkyard import cli
     assert cli.main(["update", "--check"]) == 0
     assert captured["check"] is True and captured["root"] == str(tmp_path)
+
+
+def test_start_dispatches_to_ops(monkeypatch, tmp_path):
+    import sparkyard.ops as ops
+    captured = {}
+    monkeypatch.setattr(ops, "start", lambda root: captured.update(root=root) or 0)
+    (tmp_path / "models.example.yaml").write_text("models: []\n")
+    monkeypatch.chdir(tmp_path)
+    from sparkyard import cli
+    assert cli.main(["start"]) == 0
+    assert captured["root"] == str(tmp_path)
+
+
+def test_bench_dispatches_with_flags(monkeypatch, tmp_path):
+    import sparkyard.ops as ops
+    captured = {}
+    monkeypatch.setattr(ops, "bench",
+                        lambda root, mode, base_url: captured.update(root=root, mode=mode, url=base_url) or 0)
+    (tmp_path / "models.example.yaml").write_text("models: []\n")
+    monkeypatch.chdir(tmp_path)
+    from sparkyard import cli
+    assert cli.main(["bench", "--mode", "speed", "--base-url", "http://x"]) == 0
+    assert captured == {"root": str(tmp_path), "mode": "speed", "url": "http://x"}

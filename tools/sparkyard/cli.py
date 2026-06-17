@@ -1,7 +1,17 @@
-"""Sparkyard generator CLI: `validate`, `render`, `doctor`, and `add-model` subcommands."""
+"""Sparkyard generator CLI (Click): validate/render/doctor/add-model/… subcommands.
+
+Thin Click front-end over the existing dispatch logic. The argparse parsing
+layer was replaced by Click for nicer help; everything that carries the
+exit-code contract (_find_repo_root / _resolve_paths / _PATH_DEFAULTS / the
+RenderError + settings error handling / every downstream .run() signature) is
+unchanged. `main(argv) -> int` is preserved so the console-script wrapper
+(`sys.exit(main())`), make recipes, and the existing tests keep their contract.
+"""
 import argparse
 import os
 import sys
+
+import click
 import yaml
 
 from .render import load, RenderError, render_all
@@ -46,58 +56,9 @@ def _resolve_paths(args):
     return None
 
 
-def _add_render_outputs(p):
-    p.add_argument("--llama-swap-out", default=None)
-    p.add_argument("--litellm-out", default=None)
-    p.add_argument("--env-out", default=None)
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(prog="sparkyard")
-    parser.add_argument("--models", default=None)
-    parser.add_argument("--settings", default=None)
-    sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("validate", help="validate models.yaml + settings")
-    sub.add_parser("doctor", help="advisory on-disk report (never blocks render)")
-    r = sub.add_parser("render", help="render all live config files")
-    # P3 cutover: the generated env IS the live compose .env now.
-    _add_render_outputs(r)
-
-    am = sub.add_parser("add-model", help="introspect a HF repo and add it to models.yaml")
-    am.add_argument("repo")
-    am.add_argument("--name", default=None)
-    am.add_argument("--dry-run", action="store_true")
-    am.add_argument("--yes", action="store_true")
-    am.add_argument("--download", action="store_true")
-    am.add_argument("--gguf-file", default=None,
-                    help="quant pattern to select from a GGUF repo (substring match)")
-    _add_render_outputs(am)
-
-    dl = sub.add_parser("download", help="fetch HF weights for SSOT entries with hf_repo")
-    dl.add_argument("--model", default=None, help="download only this model (by name); omit for all")
-
-    vn = sub.add_parser("vllm-node", help="clone + build the vllm-node serving image(s)")
-    vn.add_argument("--variant", choices=["base", "tf5", "mxfp4"], default=None,
-                    help="single variant to build; default builds base + tf5")
-    vn.add_argument("--vllm-ref", default=None, help="override the settings vllm_ref pin")
-    vn.add_argument("--print", dest="dry_run", action="store_true",
-                    help="print the resolved build plan and exit (no side effects)")
-
-    up = sub.add_parser("update", help="check for + apply upstream component updates")
-    up.add_argument("--check", action="store_true",
-                    help="dry run: report only, make no changes and no pull/build")
-
-    sub.add_parser("init", help="seed settings/models/secrets for first run")
-    sub.add_parser("secrets", help="scaffold + generate secrets.env")
-    sub.add_parser("build", help="build the local llama-cpp + llama-swap images")
-    sub.add_parser("start", help="start the stack (docker compose up -d)")
-    sub.add_parser("stop", help="stop the stack (docker compose down)")
-    b = sub.add_parser("bench", help="benchmark the served models")
-    b.add_argument("--mode", choices=["quality", "speed"], default=None)
-    b.add_argument("--base-url", default=None)
-
-    args = parser.parse_args(argv)
-
+def _dispatch(args):
+    """Per-command logic, preserved verbatim from the argparse implementation.
+    Returns an int exit code; surfaces application errors as return values."""
     err = _resolve_paths(args)
     if err:
         print(f"✗ {err}", file=sys.stderr)
@@ -167,6 +128,178 @@ def main(argv=None):
         from . import download
         token = addmodel._hf_token(args.settings)
         return download.run(models, settings, token, only=args.model)
+
+
+def _ns(obj, cmd, **kw):
+    """Build the argparse.Namespace that _dispatch + downstream .run() expect.
+    `obj` is the group's ctx.obj dict carrying --models/--settings."""
+    return argparse.Namespace(cmd=cmd, models=obj["models"], settings=obj["settings"], **kw)
+
+
+class OrderedGroup(click.Group):
+    """A group whose --help lists commands in registration (lifecycle) order
+    instead of Click's default alphabetical order."""
+
+    def list_commands(self, ctx):
+        return list(self.commands)
+
+
+@click.group(cls=OrderedGroup, context_settings={"help_option_names": ["-h", "--help"]})
+@click.option("--models", metavar="PATH", default=None,
+              help="Path to models.yaml (default: autodiscovered from the checkout).")
+@click.option("--settings", metavar="PATH", default=None,
+              help="Path to settings.local.yaml (default: autodiscovered from the checkout).")
+@click.pass_context
+def cli(ctx, models, settings):
+    """SSOT-driven multi-engine LLM stack generator for the NVIDIA DGX Spark."""
+    ctx.obj = {"models": models, "settings": settings}
+
+
+@cli.command()
+@click.pass_obj
+def init(obj):
+    """Seed settings.local.yaml, models.yaml, and secrets for a first run."""
+    return _dispatch(_ns(obj, "init"))
+
+
+@cli.command()
+@click.pass_obj
+def secrets(obj):
+    """Scaffold + generate secrets.env."""
+    return _dispatch(_ns(obj, "secrets"))
+
+
+@cli.command()
+@click.option("--llama-swap-out", metavar="PATH", default=None,
+              help="Override the llama-swap config output path (default: autodiscovered).")
+@click.option("--litellm-out", metavar="PATH", default=None,
+              help="Override the LiteLLM config output path (default: autodiscovered).")
+@click.option("--env-out", metavar="PATH", default=None,
+              help="Override the compose .env output path (default: autodiscovered).")
+@click.pass_obj
+def render(obj, llama_swap_out, litellm_out, env_out):
+    """Render all live config files from the SSOT (fail-closed on invalid models.yaml)."""
+    return _dispatch(_ns(obj, "render", llama_swap_out=llama_swap_out,
+                         litellm_out=litellm_out, env_out=env_out))
+
+
+@cli.command()
+@click.pass_obj
+def validate(obj):
+    """Validate models.yaml + settings (fail-closed)."""
+    return _dispatch(_ns(obj, "validate"))
+
+
+@cli.command()
+@click.pass_obj
+def doctor(obj):
+    """Advisory on-disk model report (never blocks render)."""
+    return _dispatch(_ns(obj, "doctor"))
+
+
+@cli.command()
+@click.pass_obj
+def build(obj):
+    """Build the local llama-cpp + llama-swap images (docker compose build)."""
+    return _dispatch(_ns(obj, "build"))
+
+
+@cli.command()
+@click.pass_obj
+def start(obj):
+    """Start the stack (docker compose up -d)."""
+    return _dispatch(_ns(obj, "start"))
+
+
+@cli.command()
+@click.pass_obj
+def stop(obj):
+    """Stop the stack (docker compose down)."""
+    return _dispatch(_ns(obj, "stop"))
+
+
+@cli.command("add-model")
+@click.argument("repo")
+@click.option("--name", default=None, help="Override the inferred model name.")
+@click.option("--dry-run", is_flag=True,
+              help="Print the derived entry without writing models.yaml.")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
+@click.option("--download", "download_", is_flag=True,
+              help="Download the weights after adding the entry.")
+@click.option("--gguf-file", default=None,
+              help="Quant pattern to select from a GGUF repo (substring match).")
+@click.option("--llama-swap-out", metavar="PATH", default=None,
+              help="Override the llama-swap config output path (default: autodiscovered).")
+@click.option("--litellm-out", metavar="PATH", default=None,
+              help="Override the LiteLLM config output path (default: autodiscovered).")
+@click.option("--env-out", metavar="PATH", default=None,
+              help="Override the compose .env output path (default: autodiscovered).")
+@click.pass_obj
+def add_model(obj, repo, name, dry_run, yes, download_, gguf_file,
+              llama_swap_out, litellm_out, env_out):
+    """Introspect a Hugging Face repo and append it to models.yaml."""
+    return _dispatch(_ns(obj, "add-model", repo=repo, name=name, dry_run=dry_run,
+                         yes=yes, download=download_, gguf_file=gguf_file,
+                         llama_swap_out=llama_swap_out, litellm_out=litellm_out,
+                         env_out=env_out))
+
+
+@cli.command()
+@click.option("--model", default=None,
+              help="Download only this model (by name); omit for all.")
+@click.pass_obj
+def download(obj, model):
+    """Fetch Hugging Face weights for SSOT entries that carry an hf_repo."""
+    return _dispatch(_ns(obj, "download", model=model))
+
+
+@cli.command("vllm-node")
+@click.option("--variant", type=click.Choice(["base", "tf5", "mxfp4"]), default=None,
+              help="Single variant to build; default builds base + tf5.")
+@click.option("--vllm-ref", default=None, help="Override the settings vllm_ref pin.")
+@click.option("--print", "dry_run", is_flag=True,
+              help="Print the resolved build plan and exit (no side effects).")
+@click.pass_obj
+def vllm_node(obj, variant, vllm_ref, dry_run):
+    """Clone + build the vllm-node serving image(s)."""
+    return _dispatch(_ns(obj, "vllm-node", variant=variant, vllm_ref=vllm_ref,
+                         dry_run=dry_run))
+
+
+@cli.command()
+@click.option("--check", is_flag=True,
+              help="Dry run: report only; make no changes and no pull/build.")
+@click.pass_obj
+def update(obj, check):
+    """Check for + apply upstream component updates (never floats pins)."""
+    return _dispatch(_ns(obj, "update", check=check))
+
+
+@cli.command()
+@click.option("--mode", type=click.Choice(["quality", "speed"]), default=None,
+              help="Benchmark mode (quality or speed).")
+@click.option("--base-url", default=None, help="Override the gateway base URL.")
+@click.pass_obj
+def bench(obj, mode, base_url):
+    """Benchmark the served models."""
+    return _dispatch(_ns(obj, "bench", mode=mode, base_url=base_url))
+
+
+def main(argv=None):
+    """Run the Click group and translate its outcome to the argparse-era exit
+    codes (0 ok / 1 app error / 2 usage|no-checkout). Preserved so the console
+    script wrapper `sys.exit(main())`, make recipes, and existing tests keep
+    their contract."""
+    try:
+        return cli.main(args=argv, prog_name="sparkyard", standalone_mode=False) or 0
+    except click.UsageError as e:        # bad/missing option, unknown choice/command
+        e.show()                          # argparse did sys.exit(2) on parse errors...
+        raise SystemExit(e.exit_code)     # ...so re-raise SystemExit, not return it
+    except click.ClickException as e:
+        e.show()
+        return e.exit_code
+    except click.Abort:
+        return 1
 
 
 if __name__ == "__main__":

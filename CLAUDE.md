@@ -59,20 +59,19 @@ one-line tip otherwise — never blocks unattended runs).
 
 ## Common commands
 
+The `sparkyard` CLI is the primary interface (installed by `make venv` at
+`tools/.venv/bin/sparkyard`, or globally via `uv tool install ./tools`). `make`
+targets are thin aliases; `make venv`/`test`/`lint` stay make-only (bootstrap + dev).
+
 ```bash
-make init        # first-run onboarding (settings + models.yaml + secrets)
-make secrets     # scaffold/auto-generate secrets.env
-make validate    # structural validation (fail-closed)
-make render      # regenerate the live configs
-make build       # build the local llama-cpp + llama-swap images
-make vllm-node   # clone + build the vLLM serving image(s) for SM121 (base+tf5)
-make doctor      # advisory on-disk model report
-make add-model HF_REPO=<org/model> [ADDARGS=--download]
-make download [MODEL=<name>]
-make bench [MODE=speed]
-make test        # pytest (tools/)
-make lint        # shellcheck (advisory)
-docker compose up -d
+sparkyard init        # seed settings + models.yaml + secrets (first run)
+sparkyard render      # regenerate the live configs
+sparkyard build       # build the local llama-cpp + llama-swap images
+sparkyard start       # docker compose up -d   (sparkyard stop = down)
+sparkyard update --check   # preview upstream component updates (omit --check to apply)
+sparkyard doctor      # advisory on-disk model report
+sparkyard download / add-model / vllm-node / bench / validate
+make venv / test / lint    # bootstrap + dev (make-only)
 ```
 
 ## Conventions / gotchas

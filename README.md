@@ -33,27 +33,25 @@ gitignored `secrets.env`. Adding a model is one command.
 ## Quickstart
 
 ```bash
-git clone https://github.com/slangevi/sparkyard.git
-cd sparkyard
+git clone https://github.com/slangevi/sparkyard.git && cd sparkyard
 
-make init                 # copies settings.example.yaml -> settings.local.yaml,
-                          # models.example.yaml -> models.yaml, scaffolds secrets.env
-# edit settings.local.yaml (llm_root + repo paths)
-# edit models.yaml         (keep/trim the example models, or add your own)
-# edit secrets.env         (HF_TOKEN only for gated/private models — get one at
-#                           huggingface.co/settings/tokens; the rest auto-generate)
+uv tool install ./tools        # global `sparkyard` (or: pipx install ./tools)
+sparkyard init                 # seed settings.local.yaml + models.yaml + secrets.env
+# edit settings.local.yaml (paths) + models.yaml + secrets.env (HF_TOKEN)
 
-make render               # generate .env + llama-swap/config.yaml + LiteLLM/config.yaml
-make download             # fetch weights for models.yaml entries that carry hf_repo
-make build                # build the local llama-cpp + llama-swap images
-make vllm-node            # build vllm-node image(s) — only if you run vLLM models
-docker compose up -d      # start the stack
+sparkyard render               # generate .env + llama-swap/LiteLLM configs
+sparkyard download             # fetch weights for models.yaml entries with hf_repo
+sparkyard build                # build the local llama-cpp + llama-swap images
+sparkyard vllm-node            # only if you run vLLM models (~30 min)
+sparkyard start                # docker compose up -d
 ```
 
-A model only serves once its weights are on disk: `make download` fetches weights
+Every step is a `sparkyard` subcommand — `make` is optional (see below). `sparkyard stop` tears the stack down; `sparkyard update --check` previews component updates.
+
+A model only serves once its weights are on disk: `sparkyard download` fetches weights
 for both vLLM and GGUF entries (any entry with `hf_repo`). vLLM models also need
 the `vllm-node` image (see Prerequisites); the llama.cpp GGUF example is the
-lighter first run. `make doctor` reports which models' weights are present.
+lighter first run. `sparkyard doctor` reports which models' weights are present.
 
 The gateway requires auth — call it with your `LITELLM_MASTER_KEY` (from
 `secrets.env`) as the API key, or open the browser UI at `http://localhost:3000`
@@ -68,6 +66,8 @@ curl http://localhost:14000/v1/chat/completions \
 
 ## Make commands
 
+**`make` is optional** — every target below is a thin alias for `sparkyard <cmd>`; the CLI is the primary interface.
+
 | Command | What it does |
 |---|---|
 | `make init` | First-run onboarding (idempotent): seed `settings.local.yaml`, `models.yaml`, and `secrets.env`, build the `tools/.venv`, and (if `uv` or `pipx` is present) offer to install a global `sparkyard`. |
@@ -80,6 +80,8 @@ curl http://localhost:14000/v1/chat/completions \
 | `make doctor` | Advisory on-disk report: which models' weights are present. |
 | `make add-model HF_REPO=<org/model> [ADDARGS=--download]` | Introspect a HF repo (vLLM or GGUF), append an entry to `models.yaml`, render, optionally download. |
 | `make download [MODEL=<name>]` | Fetch HF weights for `models.yaml` entries that carry `hf_repo`. |
+| `make start` / `make stop` | Start (`docker compose up -d`) / stop (`docker compose down`) the stack. |
+| `make update [UPDATEARGS=--check]` | Check for + apply upstream component updates (or `sparkyard update [--check]`). |
 | `make bench [MODE=speed]` | Benchmark each served model — quality (tool-eval-bench) or speed (llama-benchy). |
 | `make test` | Run the test suite (generator pytest + shell tests). |
 | `make lint` | Shellcheck the shell scripts (advisory if shellcheck isn't installed). |

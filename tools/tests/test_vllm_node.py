@@ -14,11 +14,10 @@ def _argvs(plan):
     return [step.argv for step in plan]
 
 
-def test_clone_when_absent_then_checkout_then_base_and_tf5():
+def test_clone_when_absent_then_base_and_tf5():
     plan = vllm_node.build_plan(CFG, ["base", "tf5"], "7852e50e4", clone_exists=False)
     argvs = _argvs(plan)
     assert argvs[0] == ["git", "clone", CFG.upstream, CFG.clone_path]
-    assert argvs[1] == ["git", "checkout", "7852e50e4"]
     assert ["./build-and-copy.sh", "--vllm-ref", "7852e50e4"] in argvs
     assert ["./build-and-copy.sh", "--tf5", "--vllm-ref", "7852e50e4"] in argvs
 
@@ -35,11 +34,11 @@ def test_build_steps_run_in_clone_dir():
     assert build.cwd == CFG.clone_path
 
 
-def test_ref_override_threads_into_checkout_and_build():
+def test_ref_override_threads_into_build():
     plan = vllm_node.build_plan(CFG, ["base"], "abc1234", clone_exists=True)
     argvs = _argvs(plan)
-    assert ["git", "checkout", "abc1234"] in argvs
     assert ["./build-and-copy.sh", "--vllm-ref", "abc1234"] in argvs
+    assert not any(a[:2] == ["git", "checkout"] for a in argvs)
 
 
 def test_mxfp4_has_no_ref_and_no_checkout():
@@ -48,6 +47,18 @@ def test_mxfp4_has_no_ref_and_no_checkout():
     assert ["./build-and-copy.sh", "--exp-mxfp4"] in argvs
     assert not any(a[:2] == ["git", "checkout"] for a in argvs)  # mxfp4 tracks its own ref
     assert not any("--vllm-ref" in a for a in argvs)
+
+
+def test_build_plan_never_checks_out_vllm_ref_in_tooling_clone():
+    # Regression: `ref` is a vLLM commit; the spark-vllm-docker tooling clone does
+    # NOT contain it. build-and-copy.sh checks vLLM out itself via --vllm-ref, so
+    # build_plan must never `git checkout <ref>` in the tooling clone — doing so
+    # aborts the build ("pathspec did not match") on a fresh clone.
+    for clone_exists in (True, False):
+        argvs = _argvs(vllm_node.build_plan(CFG, ["base", "tf5"], "7852e50e4",
+                                            clone_exists=clone_exists))
+        assert not any(a[:2] == ["git", "checkout"] for a in argvs)
+        assert ["./build-and-copy.sh", "--vllm-ref", "7852e50e4"] in argvs
 
 
 def test_default_variants_constant():
@@ -87,14 +98,14 @@ def test_exec_runs_steps_in_order_until_failure():
 
     def exec_step(step):
         seen.append(step.description)
-        return 1 if step.description == "checkout ref" else 0
+        return 1 if step.description == "build base" else 0
 
     rc = vllm_node.run(_args(), _S(),
                        exists=lambda p: True,           # clone present -> fetch
                        which=lambda t: "/usr/bin/" + t,
                        exec_step=exec_step)
     assert rc == 1
-    assert seen == ["fetch upstream", "checkout ref"]  # stops at the failing step
+    assert seen == ["fetch upstream", "build base"]  # stops at the failing step
 
 
 def test_clone_existence_checks_dot_git():

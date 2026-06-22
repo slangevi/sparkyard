@@ -89,7 +89,8 @@ def _dispatch(args):
         except (OSError, KeyError, yaml.YAMLError) as e:
             print(f"✗ {e}", file=sys.stderr)
             return 1
-        return update.run(root, settings, check=args.check, notes=args.notes, model=args.model)
+        return update.run(root, settings, check=args.check, notes=args.notes,
+                          model=args.model, components=args.components)
 
     if args.cmd in ("init", "secrets", "build", "start", "stop", "bench"):
         from . import ops
@@ -267,6 +268,7 @@ def vllm_node(obj, variant, vllm_ref, dry_run):
 
 
 @cli.command()
+@click.argument("components", nargs=-1)
 @click.option("--check", is_flag=True,
               help="Dry run: report only; make no changes and no pull/build.")
 @click.option("--notes", is_flag=True,
@@ -274,9 +276,15 @@ def vllm_node(obj, variant, vllm_ref, dry_run):
 @click.option("--model", default=None,
               help="Gateway model for the --notes summary (default: first from /v1/models).")
 @click.pass_obj
-def update(obj, check, notes, model):
-    """Check for + apply upstream component updates (never floats pins)."""
-    return _dispatch(_ns(obj, "update", check=check, notes=notes, model=model))
+def update(obj, components, check, notes, model):
+    """Check for + apply upstream component updates (never floats pins).
+
+    With no COMPONENT args, checks/updates everything. Name one or more to scope
+    the run: ollama, litellm, litellm-db, open-webui, llama-swap, llama-cpp,
+    vllm-node (llama-cpp/vllm-node are note-only).
+    """
+    return _dispatch(_ns(obj, "update", components=components, check=check,
+                         notes=notes, model=model))
 
 
 @cli.command()

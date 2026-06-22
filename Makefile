@@ -48,8 +48,9 @@ download: venv
 	tools/.venv/bin/sparkyard download $(if $(MODEL),--model "$(MODEL)",)
 
 # Check for + apply upstream component updates (bumps pins, pulls/builds; leaves a diff).
-#   make update                       # apply
-#   make update UPDATEARGS=--check    # dry-run report
+#   make update                              # apply, all components
+#   make update UPDATEARGS=--check           # dry-run report
+#   make update UPDATEARGS="litellm --check" # scope to one component
 update: venv
 	tools/.venv/bin/sparkyard update $(UPDATEARGS)
 

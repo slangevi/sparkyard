@@ -47,7 +47,7 @@ def test_vllm_node_handles_malformed_settings_yaml(tmp_path, capsys):
 def test_update_dispatches_with_check(monkeypatch, tmp_path):
     import sparkyard.update as upd
     captured = {}
-    def fake_run(root, settings, *, check, notes=False, model=None, deps=None):
+    def fake_run(root, settings, *, check, notes=False, model=None, components=None, deps=None):
         captured["root"] = root; captured["check"] = check
         return 0
     monkeypatch.setattr(upd, "run", fake_run)
@@ -86,7 +86,7 @@ def test_bench_dispatches_with_flags(monkeypatch, tmp_path):
 def test_update_notes_flag_threads_through(monkeypatch, tmp_path):
     import sparkyard.update as upd
     captured = {}
-    def fake_run(root, settings, *, check, notes=False, model=None, deps=None):
+    def fake_run(root, settings, *, check, notes=False, model=None, components=None, deps=None):
         captured.update(check=check, notes=notes, model=model)
         return 0
     monkeypatch.setattr(upd, "run", fake_run)
@@ -96,3 +96,19 @@ def test_update_notes_flag_threads_through(monkeypatch, tmp_path):
     from sparkyard import cli
     assert cli.main(["update", "--check", "--notes", "--model", "m1"]) == 0
     assert captured == {"check": True, "notes": True, "model": "m1"}
+
+
+def test_update_forwards_positional_components(monkeypatch, tmp_path):
+    import sparkyard.update as upd
+    captured = {}
+    def fake_run(root, settings, *, check, notes=False, model=None, components=None, deps=None):
+        captured.update(components=components, check=check)
+        return 0
+    monkeypatch.setattr(upd, "run", fake_run)
+    (tmp_path / "models.example.yaml").write_text("models: []\n")
+    (tmp_path / "settings.local.yaml").write_text("llm_root: /x\nrepo_path: /y\n")
+    monkeypatch.chdir(tmp_path)
+    from sparkyard import cli
+    assert cli.main(["update", "litellm", "open-webui", "--check"]) == 0
+    assert captured["components"] == ("litellm", "open-webui")
+    assert captured["check"] is True

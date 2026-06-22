@@ -85,7 +85,7 @@ curl http://localhost:14000/v1/chat/completions \
 | `sparkyard doctor` | Advisory on-disk report: which models' weights are present. |
 | `sparkyard add-model <org/model> [--download] [--gguf-file <pat>]` | Introspect a HF repo (vLLM or GGUF), append an entry to `models.yaml`, render, optionally download. |
 | `sparkyard download [--model <name>]` | Fetch HF weights for `models.yaml` entries that carry `hf_repo`. |
-| `sparkyard update [--check] [--notes]` | Check for + apply upstream component updates (`--check` = dry-run; `--notes` summarizes release/commit notes — llama-swap, litellm, open-webui, vllm-node — via your local gateway, each with an Apply/Review-first recommendation). |
+| `sparkyard update [COMPONENT]... [--check] [--notes]` | Check for + apply upstream component updates (`--check` = dry-run; `--notes` summarizes release/commit notes — llama-swap, litellm, open-webui, vllm-node — via your local gateway, each with an Apply/Review-first recommendation). Name one or more components (`ollama litellm litellm-db open-webui llama-swap llama-cpp vllm-node`) to scope the run; no names = all. |
 | `sparkyard bench [--mode speed]` | Benchmark each served model — quality (tool-eval-bench) or speed (llama-benchy). |
 
 **`make` aliases:** every command above also works as `make <cmd>` (e.g. `make

@@ -9,6 +9,26 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-22
+
+This release makes `sparkyard update` selective: scope a check or apply to one or
+more named components instead of the whole stack. Additive and
+backward-compatible — running `sparkyard update` with no arguments behaves exactly
+as before.
+
+### Added
+
+- **Per-component `sparkyard update [COMPONENT]...`** — name one or more
+  components to scope the check, apply, and `--notes` to just those; with no names
+  it still processes everything. Valid names: `ollama`, `litellm`, `litellm-db`,
+  `open-webui`, `llama-swap`, plus the report-only `llama-cpp` and `vllm-node`.
+  Examples: `sparkyard update litellm --check`,
+  `sparkyard update litellm open-webui`, `sparkyard update vllm-node --notes`.
+  `make update UPDATEARGS="litellm --check"` forwards the same arguments.
+- **Fail-closed component validation** — an unknown component name aborts with a
+  clear message naming the valid set and a non-zero exit, before any registry or
+  network call.
+
 ## [1.2.0] - 2026-06-21
 
 This release enriches `sparkyard update`'s preview: `--notes` now explains what a
@@ -107,6 +127,7 @@ NVIDIA DGX Spark (GB10).
   engines bind `127.0.0.1` and Postgres has no host port. Service healthchecks +
   `service_healthy` startup ordering.
 
+[1.3.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.3.0
 [1.2.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.2.0
 [1.1.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.1.0
 [1.0.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.0.0

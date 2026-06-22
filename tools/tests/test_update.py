@@ -304,3 +304,103 @@ def test_run_notes_passes_vllm_ref(tmp_path, monkeypatch):
     update.run(str(tmp_path), _settings(ref="abc123"), check=True, notes=True,
                deps=_fake_deps(resolved, latest_tag="v224"))
     assert seen["vllm_ref"] == "abc123"
+
+
+def _recording_deps(resolved, latest_tag="v224", sha="e" * 64, calls=None):
+    """Like _fake_deps but records every repo:tag the resolver is asked for, so a
+    test can assert that unselected images are never queried."""
+    calls = calls if calls is not None else {}
+    asked = calls.setdefault("resolved_keys", [])
+    def resolve(rt):
+        asked.append(rt)
+        return resolved[rt]
+    return update.Deps(
+        resolve_digest=resolve,
+        latest_release=lambda repo: calls.setdefault("latest", []).append(repo) or latest_tag,
+        release_sha256=lambda repo, v: sha,
+        docker_pull=lambda root, services: calls.setdefault("pull", []).append(services),
+        docker_build=lambda root, services: calls.setdefault("build", []).append(services),
+    )
+
+
+def test_run_scoped_to_one_image_pulls_only_it(tmp_path):
+    _write_repo(tmp_path)
+    calls = {}
+    resolved = {"ollama/ollama:latest": "sha256:NEWHASH"}  # only ollama is queried
+    rc = update.run(str(tmp_path), _settings(), check=False, components=["ollama"],
+                    deps=_recording_deps(resolved, calls=calls))
+    assert rc == 0
+    compose = (tmp_path / "docker-compose.yml").read_text()
+    assert "ollama/ollama:latest@sha256:NEWHASH" in compose
+    assert "sha256:bbbb" in compose and "sha256:cccc" in compose  # others untouched
+    assert calls["resolved_keys"] == ["ollama/ollama:latest"]      # no other registry calls
+    assert calls["pull"] == [["ollama"]]
+    assert "build" not in calls and "latest" not in calls          # llama-swap untouched
+
+
+def test_run_scoped_to_llamaswap_builds_only_it(tmp_path):
+    _write_repo(tmp_path)
+    calls = {}
+    rc = update.run(str(tmp_path), _settings(), check=False, components=["llama-swap"],
+                    deps=_recording_deps({}, latest_tag="v226", sha="a" * 64, calls=calls))
+    assert rc == 0
+    df = (tmp_path / "llama-swap" / "llama-swap.Dockerfile").read_text()
+    assert "VERSION=226" in df and "SHA256=" + "a" * 64 in df
+    assert calls["build"] == [["llama-swap"]]
+    assert calls["resolved_keys"] == [] and "pull" not in calls    # no image work
+
+
+def test_run_scoped_to_vllm_node_check_shows_only_note(tmp_path, capsys):
+    _write_repo(tmp_path)
+    calls = {}
+    rc = update.run(str(tmp_path), _settings(), check=True, components=["vllm-node"],
+                    deps=_recording_deps({}, calls=calls))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "vllm-node" in out
+    assert "Component" not in out                                  # no empty table
+    assert calls.get("resolved_keys") == [] and "latest" not in calls
+
+
+def test_run_unknown_component_fails_closed(tmp_path, capsys):
+    _write_repo(tmp_path)
+    calls = {}
+    rc = update.run(str(tmp_path), _settings(), check=True, components=["bogus"],
+                    deps=_recording_deps({}, calls=calls))
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "bogus" in err and "valid" in err
+    assert calls == {} or calls.get("resolved_keys") == []         # no network before abort
+
+
+def _img(service, repo, tag, digest, new_digest, status):
+    pin = update.ImagePin(service, f"{repo}:{tag}@{digest}", repo, tag, digest)
+    return update.ImageResult(pin, new_digest, status)
+
+
+def test_format_report_omits_llamaswap_row_when_no_plan():
+    r = _img("ollama", "ollama/ollama", "latest", "sha256:aaaa", None, "up-to-date")
+    out = update.format_report([r], None, None, None)
+    assert "ollama" in out
+    assert "llama-swap" not in out
+
+
+def test_format_report_omits_table_when_only_a_note():
+    out = update.format_report([], None, None, "vllm-node : pinned vLLM ref X; ...")
+    assert "Component" not in out          # no empty table header
+    assert "vllm-node" in out
+
+
+def test_format_report_full_output_unchanged():
+    # Golden string: the no-filter path (all rows + ls row + both notes) must stay
+    # byte-for-byte identical — exact equality locks that invariant, not just token
+    # presence, so a future spacing/ordering regression fails here.
+    r = _img("ollama", "ollama/ollama", "latest", "sha256:aaaa", "sha256:bbbb", "newer")
+    ls_plan = {"current": 224, "latest": 226, "new_sha": "e" * 64, "status": "newer"}
+    out = update.format_report([r], ls_plan, "llama-cpp : ...", "vllm-node : ...")
+    assert out == (
+        "\nComponent        Current     Latest      Status\n"
+        "ollama           aaaa        bbbb        NEWER\n"
+        "llama-swap       v224        v226        NEWER\n"
+        "\nllama-cpp : ...\nvllm-node : ...\n"
+    )

@@ -190,19 +190,25 @@ def _short(d):  # "sha256:abcd1234..." -> "abcd1234"
 
 
 def format_report(image_results, ls_plan, llamacpp_note, vllm_note):
-    lines = ["", "Component        Current     Latest      Status"]
-    for r in image_results:
-        if r.status == "newer":
-            cur, latest, st = _short(r.pin.digest), _short(r.new_digest), "NEWER"
-        elif r.status == "up-to-date":
-            cur, latest, st = _short(r.pin.digest), _short(r.pin.digest), "up to date"
-        else:  # error | no-tag
-            cur, latest, st = _short(r.pin.digest), "-", r.status
-        lines.append(f"{r.pin.service:<16} {cur:<11} {latest:<11} {st}")
-    ls_latest = f"v{ls_plan['latest']}" if ls_plan.get("latest") is not None else "-"
-    lines.append(f"{'llama-swap':<16} {'v' + str(ls_plan.get('current', '?')):<11} "
-                 f"{ls_latest:<11} {'NEWER' if ls_plan.get('status') == 'newer' else ls_plan.get('status')}")
-    lines += ["", llamacpp_note, vllm_note, ""]
+    lines = []
+    if image_results or ls_plan:
+        lines += ["", "Component        Current     Latest      Status"]
+        for r in image_results:
+            if r.status == "newer":
+                cur, latest, st = _short(r.pin.digest), _short(r.new_digest), "NEWER"
+            elif r.status == "up-to-date":
+                cur, latest, st = _short(r.pin.digest), _short(r.pin.digest), "up to date"
+            else:  # error | no-tag
+                cur, latest, st = _short(r.pin.digest), "-", r.status
+            lines.append(f"{r.pin.service:<16} {cur:<11} {latest:<11} {st}")
+        if ls_plan:
+            ls_latest = f"v{ls_plan['latest']}" if ls_plan.get("latest") is not None else "-"
+            lines.append(f"{'llama-swap':<16} {'v' + str(ls_plan.get('current', '?')):<11} "
+                         f"{ls_latest:<11} {'NEWER' if ls_plan.get('status') == 'newer' else ls_plan.get('status')}")
+    notes = [n for n in (llamacpp_note, vllm_note) if n]
+    if notes:
+        lines += ["", *notes]
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -223,7 +229,7 @@ _LLAMACPP_NOTE = ("llama-cpp : builds llama.cpp HEAD from source for GB10/SM121 
                   "--no-cache llama-cpp.")
 
 
-def run(root, settings, *, check=False, notes=False, model=None, deps=REAL):
+def run(root, settings, *, check=False, notes=False, model=None, components=None, deps=REAL):
     """Check/apply component updates. Returns 0 on success (incl. nothing-to-do),
     1 if an apply-phase rewrite/IO step fails. Per-image registry lookups are
     fail-soft; side effects are injected via `deps` for testability."""
@@ -234,30 +240,48 @@ def run(root, settings, *, check=False, notes=False, model=None, deps=REAL):
     with open(ls_path) as f:
         ls_text = f.read()
 
-    image_results = plan_image_updates(parse_image_pins(compose_text), deps.resolve_digest)
+    pins = parse_image_pins(compose_text)
+    valid = {p.service for p in pins} | {"llama-swap", "llama-cpp", "vllm-node"}
+    if components:
+        unknown = [c for c in components if c not in valid]
+        if unknown:
+            print(f"✗ unknown component {', '.join(repr(c) for c in unknown)}; "
+                  f"valid: {' '.join(sorted(valid))}", file=sys.stderr)
+            return 2
+
+    def want(name):
+        return not components or name in components
+
+    image_results = plan_image_updates([p for p in pins if want(p.service)], deps.resolve_digest)
     # Under --check the report only needs the version, so skip the (multi-MB) sha
     # download; the real fetch happens only when applying.
     sha_of = (lambda v: None) if check else (lambda v: deps.release_sha256(LLAMA_SWAP_REPO, v))
     # Parse + release-check together: a malformed Dockerfile or a failed GitHub
     # lookup degrades llama-swap to status 'error' rather than crashing the run.
-    try:
-        ls_pin = parse_llamaswap_pin(ls_text)
-        ls_plan = plan_llamaswap_update(
-            ls_pin.version, deps.latest_release(LLAMA_SWAP_REPO), sha_of=sha_of)
-    except Exception as e:
-        ls_plan = {"current": "?", "latest": None, "new_sha": None, "status": "error"}
-        print(f"note: llama-swap check failed: {e}", file=sys.stderr)
+    if want("llama-swap"):
+        try:
+            ls_pin = parse_llamaswap_pin(ls_text)
+            ls_plan = plan_llamaswap_update(
+                ls_pin.version, deps.latest_release(LLAMA_SWAP_REPO), sha_of=sha_of)
+        except Exception as e:
+            ls_plan = {"current": "?", "latest": None, "new_sha": None, "status": "error"}
+            print(f"note: llama-swap check failed: {e}", file=sys.stderr)
+    else:
+        ls_plan = None
 
-    vllm_note = (f"vllm-node : pinned vLLM ref {settings.vllm.vllm_ref}; bump settings.local.yaml "
-                 f"vllm.vllm_ref + run `make vllm-node` (~30 min) to update.")
-    print(format_report(image_results, ls_plan, _LLAMACPP_NOTE, vllm_note))
+    llamacpp_note = _LLAMACPP_NOTE if want("llama-cpp") else None
+    vllm_note = ((f"vllm-node : pinned vLLM ref {settings.vllm.vllm_ref}; bump settings.local.yaml "
+                  f"vllm.vllm_ref + run `make vllm-node` (~30 min) to update.")
+                 if want("vllm-node") else None)
+    print(format_report(image_results, ls_plan, llamacpp_note, vllm_note))
     if notes:
         from . import notes as notes_mod
-        notes_mod.render_notes(root, image_results, ls_plan,
-                               vllm_ref=settings.vllm.vllm_ref, model=model)
+        notes_mod.render_notes(root, image_results, ls_plan if ls_plan else {},
+                               vllm_ref=settings.vllm.vllm_ref if want("vllm-node") else None,
+                               model=model)
 
     newer_images = [r for r in image_results if r.status == "newer"]
-    ls_newer = ls_plan.get("status") == "newer"
+    ls_newer = bool(ls_plan) and ls_plan.get("status") == "newer"
     if check:
         print("Dry run (--check). Run `make update` to apply." if (newer_images or ls_newer)
               else "Everything up to date.")

@@ -5,12 +5,18 @@ one-liner. Pure assembly + injected I/O (mirrors update.py); falls back to raw
 notes when the gateway is unreachable. No external API; stdlib only."""
 import json
 import os
+import subprocess
 import urllib.request
 from collections import namedtuple
 
+class UpdateNotesError(Exception):
+    pass
+
+
 LLAMA_SWAP_REPO = "mostlygeek/llama-swap"
+VLLM_REPO = "vllm-project/vllm"
 GATEWAY_BASE_URL = "http://localhost:14000"
-_PROMPT_CHAR_BUDGET = 12000   # cap on the joined release bodies (the instruction prefix adds ~260 chars)
+_PROMPT_CHAR_BUDGET = 12000   # cap on the joined notes/commit body (the instruction prefix adds ~535 chars)
 
 Release = namedtuple("Release", "tag version body url")
 
@@ -38,14 +44,30 @@ def llamaswap_notes(releases_json, current_version, latest_version):
     return sorted(out, key=lambda r: r.version, reverse=True)
 
 
-def build_summary_prompt(notes):
-    """Assemble the gateway prompt from a list of Release. Pure."""
-    body = "\n\n".join(f"## {r.tag}\n{r.body}" for r in notes)[:_PROMPT_CHAR_BUDGET]
+def releases_body(notes):
+    """Concatenate Release bodies for the prompt. Pure."""
+    return "\n\n".join(f"## {r.tag}\n{r.body}" for r in notes)
+
+
+def commits_body(subjects):
+    """Bullet-list commit subject lines for the prompt. Pure."""
+    return "\n".join(f"- {s}" for s in subjects)
+
+
+def build_summary_prompt(source, body):
+    """`source`: human label of what changed (e.g. 'llama-swap releases v224→v226',
+    'litellm commits', 'vllm-node: vLLM commits since 7852e50e'). `body`: preassembled
+    notes/commit text (capped here). Asks for 3-5 bullets + one Recommendation line."""
+    body = body[:_PROMPT_CHAR_BUDGET]
     return (
-        "You are summarizing release notes for llama-swap (an on-demand model "
-        "proxy) for an operator running it on an NVIDIA DGX Spark. In 3-5 concise "
-        "bullets, say what these releases add, fix, or break that an operator "
-        "would care about. Be specific; skip boilerplate.\n\n" + body
+        f"You are summarizing changes in {source} for an operator running it on an "
+        "NVIDIA DGX Spark. In 3-5 concise bullets, say what changed that an operator "
+        "would care about (features, fixes, breaking changes); skip boilerplate. "
+        "Then end with exactly one final line, choosing ONE of these two forms:\n"
+        "  Recommendation: Apply — <one-line reason>   (use for additive / bugfix / routine)\n"
+        "  Recommendation: Review first — <one-line reason>   (use for breaking changes, "
+        "auth or default-behavior changes, deprecations, or anything needing operator "
+        "action)\nThis is advisory, based only on the notes below.\n\n" + body
     )
 
 
@@ -53,12 +75,10 @@ def image_note(service, old_digest, new_digest, version=None):
     """Best-effort one-liner for a digest-pinned image. Pure. `version` is
     reserved for a future image-version label (not extracted today — a digest
     delta has no version on the index manifest we fetch)."""
-    def short(d):
-        return d.split(":", 1)[-1][:8] if d else "?"
     ver = f" (v{version})" if version else ""
     url = CHANGELOG_URLS.get(service)
     tail = f" — changelog: {url}" if url else ""
-    return f"{service}: {short(old_digest)}→{short(new_digest)}{ver}{tail}"
+    return f"{service}: {_short(old_digest)}→{_short(new_digest)}{ver}{tail}"
 
 
 def read_master_key(root):
@@ -101,8 +121,16 @@ def _list_models(base_url, key):
     return ids[0] if ids else None
 
 
-NotesDeps = namedtuple("NotesDeps", "http_get_json gateway_chat list_models")
-REAL_NOTES = NotesDeps(_http_get_json, _gateway_chat, _list_models)
+def _image_labels(ref):
+    p = subprocess.run(["docker", "buildx", "imagetools", "inspect", ref,
+                        "--format", "{{json .Image}}"], capture_output=True, text=True)
+    if p.returncode != 0:
+        raise UpdateNotesError(p.stderr.strip())
+    return json.loads(p.stdout)
+
+
+NotesDeps = namedtuple("NotesDeps", "http_get_json gateway_chat list_models image_labels")
+REAL_NOTES = NotesDeps(_http_get_json, _gateway_chat, _list_models, _image_labels)
 
 
 def _print_raw(notes_list, reason):
@@ -113,6 +141,39 @@ def _print_raw(notes_list, reason):
         print(f"  {r.tag}: {r.url}")
         for ln in trimmed.splitlines():
             print(f"    {ln}")
+
+
+def _gateway_summary(root, source, body, model, base_url, deps):
+    """Try a gateway summary. Returns ((summary, model_used), None) on success, or
+    (None, reason) when there's no key/model or the call fails."""
+    key = read_master_key(root)
+    chosen = model
+    if key and not chosen:
+        try:
+            chosen = deps.list_models(base_url, key)
+        except Exception:
+            chosen = None
+    if not (key and chosen):
+        return None, "no gateway/model — start the stack or pass --model"
+    try:
+        out = deps.gateway_chat(build_summary_prompt(source, body),
+                                base_url=base_url, key=key, model=chosen)
+        return (out, chosen), None
+    except Exception as e:
+        return None, f"gateway unavailable: {e}"
+
+
+def _print_summary(res, base_url, count_note=""):
+    summary, chosen = res
+    for ln in summary.splitlines():
+        print(f"  {ln}")
+    print(f"  (summarized {count_note}via {chosen} @ {base_url})")
+
+
+def _print_raw_lines(lines, reason):
+    print(f"  ({reason} — raw)")
+    for ln in lines:
+        print(f"  {ln}")
 
 
 def _render_llamaswap(root, ls_plan, model, base_url, deps):
@@ -129,40 +190,141 @@ def _render_llamaswap(root, ls_plan, model, base_url, deps):
     if not nlist:
         print("  (no release notes found)")
         return
-    key = read_master_key(root)
-    chosen = model
-    if key and not chosen:
-        try:
-            chosen = deps.list_models(base_url, key)
-        except Exception:
-            chosen = None
-    if key and chosen:
-        try:
-            summary = deps.gateway_chat(build_summary_prompt(nlist),
-                                        base_url=base_url, key=key, model=chosen)
-            for ln in summary.splitlines():
-                print(f"  {ln}")
-            print(f"  (summarized from {len(nlist)} release(s) via {chosen} @ {base_url})")
-            return
-        except Exception as e:
-            _print_raw(nlist, f"gateway unavailable: {e}")
-            return
-    _print_raw(nlist, "no gateway/model — start the stack or pass --model")
+    res, reason = _gateway_summary(root, f"llama-swap releases v{cur}→v{latest}",
+                                   releases_body(nlist), model, base_url, deps)
+    if res:
+        _print_summary(res, base_url, f"from {len(nlist)} release(s) ")
+    else:
+        _print_raw(nlist, reason)
 
 
-def render_notes(root, image_results, ls_plan, *, model=None,
+def compare_commits(repo, base, head, http_get_json, *, cap=40):
+    """GitHub compare base...head → (subjects, total_commits). subjects = the most-
+    recent `cap` non-merge commit first-lines (GitHub lists oldest→newest). Pure
+    given http_get_json; raises on fetch error (caller fail-softs)."""
+    data = http_get_json(f"https://api.github.com/repos/{repo}/compare/{base}...{head}")
+    total = data.get("total_commits", 0)
+    subjects = []
+    for c in data.get("commits", []):
+        msg = (c.get("commit", {}).get("message") or "").splitlines()
+        line = msg[0].strip() if msg else ""
+        if line and not line.lower().startswith("merge "):
+            subjects.append(line)
+    return subjects[-cap:], total
+
+
+def _labels_from(image_json):
+    """Recursively collect any OCI Labels/labels dict from an
+    `imagetools inspect --format '{{json .Image}}'` blob. Pure."""
+    found = {}
+
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k in ("Labels", "labels") and isinstance(v, dict):
+                    found.update(v)
+                else:
+                    walk(v)
+        elif isinstance(o, list):
+            for x in o:
+                walk(x)
+
+    walk(image_json)
+    return found
+
+
+def _github_repo(url):
+    """'https://github.com/o/r(.git)(#frag)(/tree/..)' -> 'o/r', else None."""
+    if "github.com/" not in url:
+        return None
+    tail = url.split("github.com/", 1)[1].split("#", 1)[0].strip("/")
+    parts = tail.split("/")
+    if len(parts) < 2:
+        return None
+    repo = parts[1][:-4] if parts[1].endswith(".git") else parts[1]
+    return f"{parts[0]}/{repo}"
+
+
+def image_revision(image_json):
+    """(git_sha, 'owner/repo') from OCI revision+source labels, or None."""
+    labels = _labels_from(image_json)
+    rev = labels.get("org.opencontainers.image.revision")
+    repo = _github_repo(labels.get("org.opencontainers.image.source") or "")
+    return (rev, repo) if rev and repo else None
+
+
+def _short(d):
+    """First 8 hex chars of a digest (after the 'sha256:' prefix), or '?'."""
+    return d.split(":", 1)[-1][:8] if d else "?"
+
+
+def _render_image(root, r, model, base_url, deps):
+    """Summarize an image's commit diff via OCI revision labels; fail-soft to the
+    one-liner if provenance/compare/gateway is unavailable."""
+    def oneliner():
+        print("─ " + image_note(r.pin.service, r.pin.digest, r.new_digest))
+    try:
+        old = image_revision(deps.image_labels(f"{r.pin.repo}@{r.pin.digest}"))
+        new = image_revision(deps.image_labels(f"{r.pin.repo}@{r.new_digest}"))
+    except Exception:
+        return oneliner()
+    if not old or not new or old[1] != new[1]:
+        return oneliner()
+    try:
+        subs, total = compare_commits(old[1], old[0], new[0], deps.http_get_json)
+    except Exception:
+        return oneliner()
+    if not subs:
+        return oneliner()
+    print(f"─ {r.pin.service}: {total} commit(s) "
+          f"({_short(r.pin.digest)}→{_short(r.new_digest)})")
+    res, reason = _gateway_summary(root, f"{r.pin.service} commits",
+                                   commits_body(subs), model, base_url, deps)
+    if res:
+        _print_summary(res, base_url)
+    else:
+        _print_raw_lines(subs, reason)
+
+
+def _render_vllm(root, vllm_ref, model, base_url, deps):
+    """Summarize vLLM commits between the pinned ref and main. Fail-soft to the
+    report-only note (so vllm-node behaves as before when the compare is unavailable)."""
+    note = (f"vllm-node : pinned vLLM ref {vllm_ref}; bump settings.local.yaml "
+            f"vllm.vllm_ref + run `make vllm-node` (~30 min) to update.")
+    try:
+        subs, total = compare_commits(VLLM_REPO, vllm_ref, "main", deps.http_get_json)
+    except Exception:
+        print("─ " + note)
+        return
+    if not subs:
+        print("─ " + note)
+        return
+    print(f"─ vllm-node: {total} commit(s) since {vllm_ref[:9]} on {VLLM_REPO}@main")
+    if total > 250:
+        print("  (large jump — review carefully; list truncated)")
+    res, reason = _gateway_summary(root, f"vllm-node: vLLM commits since {vllm_ref[:9]}",
+                                   commits_body(subs), model, base_url, deps)
+    if res:
+        _print_summary(res, base_url, f"from {len(subs)} of {total} commit(s) ")
+    else:
+        _print_raw_lines(subs, reason)
+
+
+def render_notes(root, image_results, ls_plan, *, vllm_ref=None, model=None,
                  base_url=GATEWAY_BASE_URL, deps=REAL_NOTES):
     """Print the '--notes' section after the update report. Never raises."""
     try:
         newer_images = [r for r in image_results if r.status == "newer"]
         ls_newer = ls_plan.get("status") == "newer"
-        if not newer_images and not ls_newer:
+        if not newer_images and not ls_newer and not vllm_ref:
             print("\nNothing to summarize.")
             return
         print("\nWhat these updates provide  (--notes)")
         if ls_newer:
             _render_llamaswap(root, ls_plan, model, base_url, deps)
         for r in newer_images:
-            print("─ " + image_note(r.pin.service, r.pin.digest, r.new_digest))
+            _render_image(root, r, model, base_url, deps)
+        if vllm_ref:
+            _render_vllm(root, vllm_ref, model, base_url, deps)
     except Exception as e:   # belt-and-suspenders: notes never break update
         print(f"  (notes unavailable: {e})")

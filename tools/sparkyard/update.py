@@ -253,7 +253,8 @@ def run(root, settings, *, check=False, notes=False, model=None, deps=REAL):
     print(format_report(image_results, ls_plan, _LLAMACPP_NOTE, vllm_note))
     if notes:
         from . import notes as notes_mod
-        notes_mod.render_notes(root, image_results, ls_plan, model=model)
+        notes_mod.render_notes(root, image_results, ls_plan,
+                               vllm_ref=settings.vllm.vllm_ref, model=model)
 
     newer_images = [r for r in image_results if r.status == "newer"]
     ls_newer = ls_plan.get("status") == "newer"

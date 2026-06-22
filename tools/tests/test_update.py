@@ -289,3 +289,18 @@ def test_run_without_notes_does_not_render(tmp_path, monkeypatch):
                 "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
     update.run(str(tmp_path), _settings(), check=True, deps=_fake_deps(resolved, latest_tag="v224"))
     assert called == []
+
+
+def test_run_notes_passes_vllm_ref(tmp_path, monkeypatch):
+    _write_repo(tmp_path)
+    import sparkyard.notes as notes_mod
+    seen = {}
+    monkeypatch.setattr(notes_mod, "render_notes",
+                        lambda root, imgs, ls, **kw: seen.update(vllm_ref=kw.get("vllm_ref")))
+    resolved = {"ollama/ollama:latest": "sha256:" + "0" * 8,
+                "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+                "postgres:15-alpine": "sha256:cccc",
+                "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+    update.run(str(tmp_path), _settings(ref="abc123"), check=True, notes=True,
+               deps=_fake_deps(resolved, latest_tag="v224"))
+    assert seen["vllm_ref"] == "abc123"

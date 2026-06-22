@@ -20,12 +20,17 @@ def test_llamaswap_notes_empty_when_uptodate():
     assert notes.llamaswap_notes(RELEASES, 226, 226) == []
 
 
-def test_build_summary_prompt_includes_bodies_and_truncates():
-    p = notes.build_summary_prompt(notes.llamaswap_notes(RELEASES, 224, 226))
-    assert "Add foo. Fix bar." in p and "Speed up baz." in p
-    assert "v226" in p
-    big = [notes.Release("v999", 999, "x" * 50000, "u")]
-    assert len(notes.build_summary_prompt(big)) <= 12000 + 300  # body capped + ~260-char instruction
+def test_build_summary_prompt_includes_source_body_and_recommendation():
+    body = notes.releases_body(notes.llamaswap_notes(RELEASES, 224, 226))
+    p = notes.build_summary_prompt("llama-swap releases v224→v226", body)
+    assert "llama-swap releases v224→v226" in p           # source label
+    assert "Add foo. Fix bar." in p and "Speed up baz." in p  # bodies
+    assert "Recommendation: Apply" in p and "Recommendation: Review first" in p
+    assert len(notes.build_summary_prompt("x", "y" * 50000)) <= 12000 + 600  # body capped
+
+
+def test_commits_body_formats_subjects():
+    assert notes.commits_body(["add foo", "fix bar"]) == "- add foo\n- fix bar"
 
 
 def test_image_note_formats_delta_and_link():
@@ -72,7 +77,9 @@ def _deps(*, releases=RELEASES, chat=None, models="m1", calls=None):
         return chat
     def list_models(base_url, key):
         return models
-    return notes.NotesDeps(http_get_json, gateway_chat, list_models)
+    def image_labels(ref):
+        return {}
+    return notes.NotesDeps(http_get_json, gateway_chat, list_models, image_labels)
 
 
 def test_render_summarizes_via_gateway(tmp_path, capsys, monkeypatch):
@@ -127,3 +134,148 @@ def test_render_images_oneliner_and_nothing(tmp_path, capsys):
     capsys.readouterr()
     notes.render_notes(str(tmp_path), [], {"status": "up-to-date"}, deps=_deps())
     assert "Nothing to summarize" in capsys.readouterr().out
+
+
+_COMPARE = {
+    "total_commits": 3,
+    "commits": [
+        {"commit": {"message": "add A\n\ndetail"}},
+        {"commit": {"message": "Merge pull request #9 from x"}},
+        {"commit": {"message": "fix B"}},
+    ],
+}
+
+
+def test_compare_commits_drops_merges_and_caps():
+    subs, total = notes.compare_commits("o/r", "aaa", "bbb", lambda url: _COMPARE, cap=40)
+    assert subs == ["add A", "fix B"] and total == 3
+
+
+def test_compare_commits_cap_keeps_most_recent():
+    many = {"total_commits": 100,
+            "commits": [{"commit": {"message": f"c{i}"}} for i in range(100)]}
+    subs, total = notes.compare_commits("o/r", "a", "b", lambda url: many, cap=5)
+    assert subs == ["c95", "c96", "c97", "c98", "c99"] and total == 100
+
+
+_IMAGE_JSON = {"linux/arm64": {"config": {"Labels": {
+    "org.opencontainers.image.revision": "33df5891",
+    "org.opencontainers.image.source": "https://github.com/BerriAI/litellm",
+}}}}
+
+
+def test_image_revision_extracts_sha_and_repo():
+    assert notes.image_revision(_IMAGE_JSON) == ("33df5891", "BerriAI/litellm")
+
+
+def test_image_revision_none_when_no_provenance():
+    assert notes.image_revision({"linux/amd64": {"config": {"Labels": {
+        "org.opencontainers.image.version": "24.04"}}}}) is None
+
+
+def test_github_repo_parses_variants():
+    assert notes._github_repo("https://github.com/o/r.git") == "o/r"
+    assert notes._github_repo("https://github.com/o/r#frag") == "o/r"
+    assert notes._github_repo("https://github.com/o/r/tree/main") == "o/r"
+    assert notes._github_repo("https://gitlab.com/o/r") is None
+
+
+def _deps2(*, releases=RELEASES, chat=None, models="m1", labels=None, calls=None):
+    calls = calls if calls is not None else {}
+    def http_get_json(url, headers=None):
+        calls.setdefault("get", []).append(url)
+        return _COMPARE if "/compare/" in url else releases
+    def gateway_chat(prompt, *, base_url, key, model):
+        calls.update(prompt=prompt, model=model, base_url=base_url, key=key)
+        if chat is None:
+            raise RuntimeError("no gateway")
+        return chat
+    def list_models(base_url, key):
+        return models
+    def image_labels(ref):
+        calls.setdefault("inspect", []).append(ref)
+        return (labels or {}).get(ref, {})
+    return notes.NotesDeps(http_get_json, gateway_chat, list_models, image_labels)
+
+
+def _imgres(service, repo, old, new):
+    pin = types.SimpleNamespace(service=service, repo=repo, digest=old)
+    return types.SimpleNamespace(pin=pin, new_digest=new, status="newer")
+
+
+def test_render_image_summarizes_commits(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-x")
+    r = _imgres("litellm", "docker.litellm.ai/berriai/litellm-database",
+                "sha256:OLD", "sha256:NEW")
+    labels = {
+        "docker.litellm.ai/berriai/litellm-database@sha256:OLD":
+            {"c": {"config": {"Labels": {
+                "org.opencontainers.image.revision": "aaa",
+                "org.opencontainers.image.source": "https://github.com/BerriAI/litellm"}}}},
+        "docker.litellm.ai/berriai/litellm-database@sha256:NEW":
+            {"c": {"config": {"Labels": {
+                "org.opencontainers.image.revision": "bbb",
+                "org.opencontainers.image.source": "https://github.com/BerriAI/litellm"}}}},
+    }
+    calls = {}
+    notes.render_notes(str(tmp_path), [r], {"status": "up-to-date"},
+                       deps=_deps2(chat="• did things\nRecommendation: Apply — routine",
+                                   labels=labels, calls=calls))
+    out = capsys.readouterr().out
+    assert "litellm" in out and "did things" in out and "Recommendation: Apply" in out
+    assert "/compare/aaa...bbb" in calls["get"][-1]
+    assert "add A" in calls["prompt"]
+
+
+def test_render_image_falls_back_to_oneliner_without_provenance(tmp_path, capsys):
+    r = _imgres("ollama", "ollama/ollama", "sha256:8402d2372a", "sha256:0e8dfd6910")
+    notes.render_notes(str(tmp_path), [r], {"status": "up-to-date"}, deps=_deps2(labels={}))
+    out = capsys.readouterr().out
+    assert "ollama: 8402d237→0e8dfd69" in out
+
+
+def test_render_image_falls_back_to_oneliner_on_compare_error(tmp_path, capsys, monkeypatch):
+    # labels present + valid, but the GitHub compare fetch errors → one-liner, no crash.
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-x")
+    r = _imgres("litellm", "docker.litellm.ai/berriai/litellm-database",
+                "sha256:8402d2372a", "sha256:0e8dfd6910")
+    labels = {
+        "docker.litellm.ai/berriai/litellm-database@sha256:8402d2372a":
+            {"c": {"config": {"Labels": {
+                "org.opencontainers.image.revision": "aaa",
+                "org.opencontainers.image.source": "https://github.com/BerriAI/litellm"}}}},
+        "docker.litellm.ai/berriai/litellm-database@sha256:0e8dfd6910":
+            {"c": {"config": {"Labels": {
+                "org.opencontainers.image.revision": "bbb",
+                "org.opencontainers.image.source": "https://github.com/BerriAI/litellm"}}}},
+    }
+    deps = _deps2(labels=labels)
+    def boom(url, headers=None):
+        raise RuntimeError("network error")
+    deps = deps._replace(http_get_json=boom)
+    notes.render_notes(str(tmp_path), [r], {"status": "up-to-date"}, deps=deps)
+    out = capsys.readouterr().out
+    assert "litellm: 8402d237→0e8dfd69" in out          # one-liner fallback, no crash
+
+
+def test_render_vllm_summarizes_commits_since_ref(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-x")
+    calls = {}
+    notes.render_notes(str(tmp_path), [], {"status": "up-to-date"}, vllm_ref="7852e50e4",
+                       deps=_deps2(chat="• vllm stuff\nRecommendation: Review first — big jump",
+                                   calls=calls))
+    out = capsys.readouterr().out
+    assert "vllm-node" in out and "vllm stuff" in out and "Recommendation: Review first" in out
+    assert "/compare/7852e50e4...main" in calls["get"][-1]
+    assert "3 commit(s) since" in out          # _COMPARE total_commits == 3
+
+
+def test_render_vllm_failsoft_on_compare_error(tmp_path, capsys):
+    deps = _deps2()
+    def boom(url, headers=None):
+        raise RuntimeError("gh down")
+    deps = deps._replace(http_get_json=boom)
+    notes.render_notes(str(tmp_path), [], {"status": "up-to-date"},
+                       vllm_ref="7852e50e4", deps=deps)
+    out = capsys.readouterr().out
+    assert "vllm-node" in out and "vllm.vllm_ref" in out   # report-only note, no crash

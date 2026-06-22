@@ -68,7 +68,7 @@ sparkyard init        # seed settings + models.yaml + secrets (first run)
 sparkyard render      # regenerate the live configs
 sparkyard build       # build the local llama-cpp + llama-swap images
 sparkyard start       # docker compose up -d   (sparkyard stop = down)
-sparkyard update --check [--notes]   # preview updates (--notes summarizes them via the gateway)
+sparkyard update --check [--notes]   # preview updates (--notes: gateway summary + apply recommendation)
 sparkyard doctor      # advisory on-disk model report
 sparkyard download / add-model / vllm-node / bench / validate
 make venv / test / lint    # bootstrap + dev (make-only)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sparkyard"
-version = "1.1.0"
+version = "1.2.0"
 description = "SSOT-driven multi-engine LLM stack generator for the NVIDIA DGX Spark"
 requires-python = ">=3.10"
 dependencies = [

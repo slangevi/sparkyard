@@ -9,6 +9,30 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-21
+
+This release enriches `sparkyard update`'s preview: `--notes` now explains what a
+pending update provides and recommends whether to apply it — summarized by your
+own local LiteLLM gateway, with graceful fallbacks. Additive and backward-compatible.
+
+### Added
+
+- **`sparkyard update --check --notes`** — summarize what each pending update
+  provides, via your local LiteLLM gateway (`:14000`; no external API; stdlib only).
+  Falls back to raw notes when the gateway/model is unavailable, and never changes
+  `update`'s exit code.
+- **Apply recommendations** — each summarized component ends with an advisory
+  `Recommendation: Apply` or `Recommendation: Review first` (breaking changes,
+  auth/default-behavior changes, and deprecations lean "Review first").
+- **Commit-diff summaries for source-tracked components** — beyond llama-swap's
+  release notes, `--notes` summarizes the commits behind a bump: litellm and
+  open-webui via their OCI image revision labels (old/new digest → GitHub compare),
+  and vllm-node via the pinned vLLM ref → `vllm-project/vllm@main` (with a
+  large-jump caveat). Images without provenance (ollama, postgres) show a
+  digest-delta + changelog one-liner.
+- **`sparkyard update --model <name>`** — choose the gateway model for the
+  `--notes` summary (defaults to the first model the gateway lists).
+
 ## [1.1.0] - 2026-06-17
 
 This release turns the `make`-driven flow into a first-class `sparkyard` CLI and
@@ -83,5 +107,6 @@ NVIDIA DGX Spark (GB10).
   engines bind `127.0.0.1` and Postgres has no host port. Service healthchecks +
   `service_healthy` startup ordering.
 
+[1.2.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.2.0
 [1.1.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.1.0
 [1.0.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.0.0

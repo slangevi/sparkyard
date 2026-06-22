@@ -89,7 +89,7 @@ def _dispatch(args):
         except (OSError, KeyError, yaml.YAMLError) as e:
             print(f"✗ {e}", file=sys.stderr)
             return 1
-        return update.run(root, settings, check=args.check)
+        return update.run(root, settings, check=args.check, notes=args.notes, model=args.model)
 
     if args.cmd in ("init", "secrets", "build", "start", "stop", "bench"):
         from . import ops
@@ -269,10 +269,14 @@ def vllm_node(obj, variant, vllm_ref, dry_run):
 @cli.command()
 @click.option("--check", is_flag=True,
               help="Dry run: report only; make no changes and no pull/build.")
+@click.option("--notes", is_flag=True,
+              help="Summarize what the updates provide (via the local gateway; raw notes if it's down).")
+@click.option("--model", default=None,
+              help="Gateway model for the --notes summary (default: first from /v1/models).")
 @click.pass_obj
-def update(obj, check):
+def update(obj, check, notes, model):
     """Check for + apply upstream component updates (never floats pins)."""
-    return _dispatch(_ns(obj, "update", check=check))
+    return _dispatch(_ns(obj, "update", check=check, notes=notes, model=model))
 
 
 @cli.command()

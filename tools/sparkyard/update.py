@@ -223,7 +223,7 @@ _LLAMACPP_NOTE = ("llama-cpp : builds llama.cpp HEAD from source for GB10/SM121 
                   "--no-cache llama-cpp.")
 
 
-def run(root, settings, *, check=False, deps=REAL):
+def run(root, settings, *, check=False, notes=False, model=None, deps=REAL):
     """Check/apply component updates. Returns 0 on success (incl. nothing-to-do),
     1 if an apply-phase rewrite/IO step fails. Per-image registry lookups are
     fail-soft; side effects are injected via `deps` for testability."""
@@ -251,6 +251,9 @@ def run(root, settings, *, check=False, deps=REAL):
     vllm_note = (f"vllm-node : pinned vLLM ref {settings.vllm.vllm_ref}; bump settings.local.yaml "
                  f"vllm.vllm_ref + run `make vllm-node` (~30 min) to update.")
     print(format_report(image_results, ls_plan, _LLAMACPP_NOTE, vllm_note))
+    if notes:
+        from . import notes as notes_mod
+        notes_mod.render_notes(root, image_results, ls_plan, model=model)
 
     newer_images = [r for r in image_results if r.status == "newer"]
     ls_newer = ls_plan.get("status") == "newer"

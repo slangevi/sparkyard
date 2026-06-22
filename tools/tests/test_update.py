@@ -260,3 +260,32 @@ def test_run_apply_all_uptodate_writes_nothing_and_no_docker(tmp_path, capsys):
     assert "0" * 8 in (tmp_path / "docker-compose.yml").read_text()
     assert "VERSION=224" in (tmp_path / "llama-swap" / "llama-swap.Dockerfile").read_text()
     assert "Everything up to date." in capsys.readouterr().out
+
+
+def test_run_notes_calls_render(tmp_path, monkeypatch):
+    _write_repo(tmp_path)
+    import sparkyard.notes as notes_mod
+    seen = {}
+    monkeypatch.setattr(notes_mod, "render_notes",
+                        lambda root, imgs, ls, **kw: seen.update(root=root, model=kw.get("model")))
+    resolved = {"ollama/ollama:latest": "sha256:" + "0" * 8,
+                "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+                "postgres:15-alpine": "sha256:cccc",
+                "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+    rc = update.run(str(tmp_path), _settings(), check=True, notes=True, model="m1",
+                    deps=_fake_deps(resolved, latest_tag="v224"))
+    assert rc == 0
+    assert seen["root"] == str(tmp_path) and seen["model"] == "m1"
+
+
+def test_run_without_notes_does_not_render(tmp_path, monkeypatch):
+    _write_repo(tmp_path)
+    import sparkyard.notes as notes_mod
+    called = []
+    monkeypatch.setattr(notes_mod, "render_notes", lambda *a, **k: called.append(1))
+    resolved = {"ollama/ollama:latest": "sha256:" + "0" * 8,
+                "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+                "postgres:15-alpine": "sha256:cccc",
+                "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+    update.run(str(tmp_path), _settings(), check=True, deps=_fake_deps(resolved, latest_tag="v224"))
+    assert called == []

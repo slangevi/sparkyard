@@ -9,6 +9,48 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-06-22
+
+This release makes `sparkyard update` *apply* updates for the two source-built
+components — `vllm-node` and `llama-cpp` — which were previously report-only. Each
+resolves its upstream default-branch HEAD, rebuilds at that ref, and persists the
+pin only on a successful build. Additive and backward-compatible: the heavy builds
+fire only when a component is named explicitly.
+
+### Added
+
+- **`sparkyard update vllm-node` / `update llama-cpp` now apply.** Each resolves
+  the upstream default-branch HEAD (`vllm-project/vllm@main`,
+  `ggml-org/llama.cpp@master`), reports how many commits behind it is, and — when
+  named explicitly — rebuilds at that ref. `--check` / `--notes` show a real
+  commit-diff; both fail-soft to a static note when GitHub is unreachable.
+- **Explicit-naming gate.** A bare `sparkyard update` (no component args) reports
+  the source-built components but does not trigger their (~30-min) builds; name
+  one explicitly to opt into the build.
+- **Build-then-persist.** A failed build writes nothing. On success, `vllm-node`
+  syncs all four ref locations — `settings.local.yaml`, `settings.py`
+  `DEFAULT_VLLM_REF`, and `vllm/VLLM_NODE_PROVENANCE.md` (including its
+  reproduce-command refs) — sourced from the clone's recorded build artifacts.
+
+### Changed
+
+- **llama.cpp is now pinned.** `llama-cpp/llama-cpp.Dockerfile` gained an
+  `ARG LLAMA_CPP_REF`; it previously cloned llama.cpp HEAD on every build, which
+  contradicted the stack's "never floats" rule. `sparkyard update llama-cpp`
+  rebuilds via `--build-arg` and bumps the ARG on a successful build.
+
+### Fixed
+
+- **The `llama-cpp` update component now targets the right compose service.** It
+  builds the `llama-server` service; the previous note pointed at a non-existent
+  `llama-cpp` service.
+- **`vllm-node` build on a fresh clone.** The build no longer runs
+  `git checkout <vllm_ref>` inside the `spark-vllm-docker` tooling clone — that ref
+  is a vLLM commit absent from the tooling repo, so a fresh clone aborted with
+  `pathspec did not match`. `build-and-copy.sh` already checks vLLM out via
+  `--vllm-ref`. Verified on a DGX Spark (GB10): the base build completes and the
+  resulting image loads vLLM.
+
 ## [1.3.0] - 2026-06-22
 
 This release makes `sparkyard update` selective: scope a check or apply to one or
@@ -127,6 +169,7 @@ NVIDIA DGX Spark (GB10).
   engines bind `127.0.0.1` and Postgres has no host port. Service healthchecks +
   `service_healthy` startup ordering.
 
+[1.4.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.4.0
 [1.3.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.3.0
 [1.2.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.2.0
 [1.1.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.1.0

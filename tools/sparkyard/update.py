@@ -5,6 +5,7 @@ commits.
 
 Parse/plan/rewrite are pure and unit-tested; side effects (registry/GitHub/
 docker) live behind injected deps for testability — mirrors vllm_node.py."""
+import datetime
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ import sys
 import urllib.request
 import yaml
 from collections import namedtuple
+from . import notes as _notes
 
 
 class UpdateError(Exception):
@@ -125,9 +127,30 @@ def rewrite_llamaswap(dockerfile_text, new_version, new_sha):
     return text
 
 
+_LCPP_REF = re.compile(r"^ARG LLAMA_CPP_REF=(\S+)", re.M)
+_LCPP_PINNED = re.compile(r"^# llama\.cpp pinned \d{4}-\d{2}-\d{2};", re.M)
+
+
+def parse_llamacpp_pin(dockerfile_text):
+    m = _LCPP_REF.search(dockerfile_text)
+    if not m:
+        raise UpdateError("could not find ARG LLAMA_CPP_REF in llama-cpp.Dockerfile")
+    return m.group(1)
+
+
+def rewrite_llamacpp_ref(dockerfile_text, new_sha, date):
+    text, n = _LCPP_REF.subn(f"ARG LLAMA_CPP_REF={new_sha}", dockerfile_text, count=1)
+    if n != 1:
+        raise UpdateError("ARG LLAMA_CPP_REF line not found for rewrite")
+    text = _LCPP_PINNED.sub(f"# llama.cpp pinned {date};", text, count=1)
+    return text
+
+
 LLAMA_SWAP_REPO = "mostlygeek/llama-swap"
 
-Deps = namedtuple("Deps", "resolve_digest latest_release release_sha256 docker_pull docker_build")
+Deps = namedtuple("Deps", "resolve_digest latest_release release_sha256 "
+                         "docker_pull docker_build "
+                         "resolve_head commits_behind docker_build_arg")
 
 
 def _manifest_digest(imagetools_json):
@@ -182,7 +205,31 @@ def _docker_build(root, services):
     return subprocess.run(["docker", "compose", "build", *services], cwd=root).returncode
 
 
-REAL = Deps(_resolve_digest, _latest_release, _release_sha256, _docker_pull, _docker_build)
+def _resolve_head(repo, branch):
+    return _notes.resolve_head(repo, branch, _notes._http_get_json)
+
+
+def _commits_behind(repo, base, head):
+    return _notes.compare_commits(repo, base, head, _notes._http_get_json)[1]
+
+
+def _docker_build_arg(root, service, build_args):
+    args = []
+    for k, v in build_args.items():
+        args += ["--build-arg", f"{k}={v}"]
+    return subprocess.run(["docker", "compose", "build", *args, service], cwd=root).returncode
+
+
+REAL = Deps(_resolve_digest, _latest_release, _release_sha256, _docker_pull, _docker_build,
+            _resolve_head, _commits_behind, _docker_build_arg)
+
+
+def _build_vllm(root, ref):
+    import types as _t
+    from . import vllm_node, settings as _settings_mod
+    s = _settings_mod.Settings.load(os.path.join(root, "settings.local.yaml"))
+    args = _t.SimpleNamespace(variant=None, vllm_ref=ref, dry_run=False)
+    return vllm_node.run(args, s)
 
 
 def _short(d):  # "sha256:abcd1234..." -> "abcd1234"
@@ -212,6 +259,32 @@ def format_report(image_results, ls_plan, llamacpp_note, vllm_note):
     return "\n".join(lines)
 
 
+STATIC_NOTES = {
+    "vllm-node": ("vllm-node : built from a pinned vLLM ref; run "
+                  "`sparkyard update vllm-node` to rebuild at vllm-project/vllm@main HEAD "
+                  "(~30 min)."),
+    "llama-cpp": ("llama-cpp : built from a pinned llama.cpp ref; run "
+                  "`sparkyard update llama-cpp` to rebuild at ggml-org/llama.cpp@master HEAD."),
+}
+
+
+def plan_sourcebuilt(current_ref, head_ref, total_commits):
+    """Classify a source-built component. up-to-date iff the resolved (full) head
+    SHA begins with the stored (possibly short) ref. Pure."""
+    up = bool(current_ref) and head_ref.startswith(current_ref)
+    return {"current": current_ref, "head": head_ref, "total": total_commits,
+            "status": "up-to-date" if up else "newer"}
+
+
+def format_sourcebuilt_note(component, branch, plan):
+    """One report/notes line for a source-built component. Pure."""
+    if plan["status"] == "up-to-date":
+        return f"{component} : up to date (pinned {_short(plan['current'])} == {branch} HEAD)."
+    return (f"{component} : {plan['total']} commit(s) behind {branch} "
+            f"({_short(plan['current'])} → {_short(plan['head'])}); "
+            f"run `sparkyard update {component}` to rebuild.")
+
+
 def _atomic_write(path, text):
     tmp = path + ".tmp"
     try:
@@ -224,15 +297,79 @@ def _atomic_write(path, text):
         raise
 
 
-_LLAMACPP_NOTE = ("llama-cpp : builds llama.cpp HEAD from source for GB10/SM121 + CUDA 13.1 "
-                  "(no upstream image targets this yet). Refresh: docker compose build "
-                  "--no-cache llama-cpp.")
+COMPONENT_SERVICE = {"llama-cpp": "llama-server"}
 
 
-def run(root, settings, *, check=False, notes=False, model=None, components=None, deps=REAL):
+def _handle_sourcebuilt_plan(repo, branch, current_ref, deps):
+    """Resolve HEAD + classify. Returns (plan, head) or (None, None) if GitHub
+    is unreachable (caller fail-softs to the static note)."""
+    try:
+        head = deps.resolve_head(repo, branch)
+        total = deps.commits_behind(repo, current_ref, head)
+    except Exception:
+        return None, None
+    return plan_sourcebuilt(current_ref, head, total), head
+
+
+def _handle_llamacpp(root, *, check, explicit, deps, today):
+    """Return (note, rc, status). rc is None when nothing was applied; an int when
+    a build ran (0 ok, non-0 fail). status is "up-to-date"/"newer", or None when
+    GitHub was unreachable (fail-soft to the static note)."""
+    df_path = os.path.join(root, "llama-cpp", "llama-cpp.Dockerfile")
+    try:
+        df_text = open(df_path).read()
+        current = parse_llamacpp_pin(df_text)
+    except Exception:
+        return STATIC_NOTES["llama-cpp"], None, None
+    plan, head = _handle_sourcebuilt_plan(_notes.LLAMACPP_REPO, "master", current, deps)
+    if plan is None:
+        return STATIC_NOTES["llama-cpp"], None, None
+    note = format_sourcebuilt_note("llama-cpp", "master", plan)
+    if check or not explicit or plan["status"] != "newer":
+        return note, None, plan["status"]
+    print(f"… rebuilding llama-cpp (service llama-server) at {_short(head)} on "
+          f"{_notes.LLAMACPP_REPO}@master.")
+    rc = deps.docker_build_arg(root, COMPONENT_SERVICE["llama-cpp"], {"LLAMA_CPP_REF": head})
+    if rc == 0:
+        _atomic_write(df_path, rewrite_llamacpp_ref(df_text, head, today))
+    return note, rc, plan["status"]
+
+
+def _handle_vllmnode(root, settings, *, check, explicit, deps, build_vllm,
+                     read_text, listdir, vllm_pin):
+    current = settings.vllm.vllm_ref
+    plan, head = _handle_sourcebuilt_plan(_notes.VLLM_REPO, "main", current, deps)
+    if plan is None:
+        return STATIC_NOTES["vllm-node"], None, None
+    note = format_sourcebuilt_note("vllm-node", "main", plan)
+    if check or not explicit or plan["status"] != "newer":
+        return note, None, plan["status"]
+    print(f"… rebuilding vllm-node at {_short(head)} on {_notes.VLLM_REPO}@main "
+          f"(~30 min).")
+    rc = build_vllm(head)
+    if rc == 0:
+        # Clone artifacts use the injected readers (the clone is faked in tests);
+        # the repo's own settings/provenance files are read with plain open().
+        built = vllm_pin.read_built_refs(settings.vllm.clone_path, read_text, listdir)
+        sl = os.path.join(root, "settings.local.yaml")
+        sp = os.path.join(root, "tools", "sparkyard", "settings.py")
+        pv = os.path.join(root, "vllm", "VLLM_NODE_PROVENANCE.md")
+        _atomic_write(sl, vllm_pin.upsert_settings_local_ref(open(sl).read(), head))
+        _atomic_write(sp, vllm_pin.rewrite_default_ref(open(sp).read(), head))
+        _atomic_write(pv, vllm_pin.rewrite_provenance(open(pv).read(), built))
+    return note, rc, plan["status"]
+
+
+def run(root, settings, *, check=False, notes=False, model=None, components=None,
+        deps=REAL, build_vllm=None, read_text=None, listdir=None):
     """Check/apply component updates. Returns 0 on success (incl. nothing-to-do),
     1 if an apply-phase rewrite/IO step fails. Per-image registry lookups are
     fail-soft; side effects are injected via `deps` for testability."""
+    today = datetime.date.today().isoformat()
+    build_vllm = build_vllm or (lambda ref: _build_vllm(root, ref))
+    read_text = read_text or (lambda p: open(p).read())
+    listdir = listdir or os.listdir
+    from . import vllm_pin  # lazy import to avoid cycle (vllm_pin imports update)
     compose_path = os.path.join(root, "docker-compose.yml")
     ls_path = os.path.join(root, "llama-swap", "llama-swap.Dockerfile")
     with open(compose_path) as f:
@@ -252,6 +389,9 @@ def run(root, settings, *, check=False, notes=False, model=None, components=None
     def want(name):
         return not components or name in components
 
+    def explicit(name):
+        return bool(components) and name in components
+
     image_results = plan_image_updates([p for p in pins if want(p.service)], deps.resolve_digest)
     # Under --check the report only needs the version, so skip the (multi-MB) sha
     # download; the real fetch happens only when applying.
@@ -269,24 +409,41 @@ def run(root, settings, *, check=False, notes=False, model=None, components=None
     else:
         ls_plan = None
 
-    llamacpp_note = _LLAMACPP_NOTE if want("llama-cpp") else None
-    vllm_note = ((f"vllm-node : pinned vLLM ref {settings.vllm.vllm_ref}; bump settings.local.yaml "
-                  f"vllm.vllm_ref + run `make vllm-node` (~30 min) to update.")
-                 if want("vllm-node") else None)
+    llamacpp_note = None
+    llamacpp_rc = None
+    llamacpp_status = None
+    if want("llama-cpp"):
+        llamacpp_note, llamacpp_rc, llamacpp_status = _handle_llamacpp(
+            root, check=check, explicit=explicit("llama-cpp"), deps=deps, today=today)
+    vllm_note = None
+    vllm_rc = None
+    vllm_status = None
+    if want("vllm-node"):
+        vllm_note, vllm_rc, vllm_status = _handle_vllmnode(
+            root, settings, check=check, explicit=explicit("vllm-node"), deps=deps,
+            build_vllm=build_vllm, read_text=read_text, listdir=listdir, vllm_pin=vllm_pin)
     print(format_report(image_results, ls_plan, llamacpp_note, vllm_note))
     if notes:
-        from . import notes as notes_mod
-        notes_mod.render_notes(root, image_results, ls_plan if ls_plan else {},
-                               vllm_ref=settings.vllm.vllm_ref if want("vllm-node") else None,
-                               model=model)
+        lcpp_ref = None
+        if want("llama-cpp"):
+            try:
+                lcpp_ref = parse_llamacpp_pin(
+                    open(os.path.join(root, "llama-cpp", "llama-cpp.Dockerfile")).read())
+            except Exception:
+                lcpp_ref = None
+        _notes.render_notes(root, image_results, ls_plan if ls_plan else {},
+                            vllm_ref=settings.vllm.vllm_ref if want("vllm-node") else None,
+                            llamacpp_ref=lcpp_ref, model=model)
 
     newer_images = [r for r in image_results if r.status == "newer"]
     ls_newer = bool(ls_plan) and ls_plan.get("status") == "newer"
+    sourcebuilt_newer = (llamacpp_status == "newer") or (vllm_status == "newer")
     if check:
-        print("Dry run (--check). Run `make update` to apply." if (newer_images or ls_newer)
-              else "Everything up to date.")
+        print("Dry run (--check). Run `sparkyard update <component>` to apply."
+              if (newer_images or ls_newer or sourcebuilt_newer) else "Everything up to date.")
         return 0
-    if not newer_images and not ls_newer:
+    applied_sourcebuilt = (llamacpp_rc is not None) or (vllm_rc is not None)
+    if not newer_images and not ls_newer and not applied_sourcebuilt:
         print("Everything up to date.")
         return 0
 
@@ -305,10 +462,15 @@ def run(root, settings, *, check=False, notes=False, model=None, components=None
         print(f"✗ {e}", file=sys.stderr)
         return 1
 
+    if llamacpp_rc:
+        docker_rc = llamacpp_rc or docker_rc
+    if vllm_rc:
+        docker_rc = vllm_rc or docker_rc
     if docker_rc:
         print("\n• Bumped pins in the tracked files, but a docker pull/build step "
               "reported an error — check the output above.")
-    else:
-        print("\n✓ Bumped pins in the tracked files and pulled/built the changed services.")
+        print("  Review `git diff` and commit when you're happy.")
+        return 1
+    print("\n✓ Bumped pins in the tracked files and pulled/built the changed services.")
     print("  Review `git diff` and commit when you're happy.")
     return 0

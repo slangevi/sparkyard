@@ -281,7 +281,8 @@ def update(obj, components, check, notes, model):
 
     With no COMPONENT args, checks/updates everything. Name one or more to scope
     the run: ollama, litellm, litellm-db, open-webui, llama-swap, llama-cpp,
-    vllm-node (llama-cpp/vllm-node are note-only).
+    vllm-node. Source-built components (llama-cpp, vllm-node) rebuild only when
+    named explicitly; a bare `update` reports them without building.
     """
     return _dispatch(_ns(obj, "update", components=components, check=check,
                          notes=notes, model=model))

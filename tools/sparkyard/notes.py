@@ -15,6 +15,7 @@ class UpdateNotesError(Exception):
 
 LLAMA_SWAP_REPO = "mostlygeek/llama-swap"
 VLLM_REPO = "vllm-project/vllm"
+LLAMACPP_REPO = "ggml-org/llama.cpp"
 GATEWAY_BASE_URL = "http://localhost:14000"
 _PROMPT_CHAR_BUDGET = 12000   # cap on the joined notes/commit body (the instruction prefix adds ~535 chars)
 
@@ -213,6 +214,16 @@ def compare_commits(repo, base, head, http_get_json, *, cap=40):
     return subjects[-cap:], total
 
 
+def resolve_head(repo, branch, http_get_json):
+    """Return the commit SHA at the HEAD of `branch`. Pure given http_get_json;
+    raises UpdateNotesError on a malformed response."""
+    data = http_get_json(f"https://api.github.com/repos/{repo}/commits/{branch}")
+    sha = data.get("sha") if isinstance(data, dict) else None
+    if not isinstance(sha, str) or not sha:
+        raise UpdateNotesError(f"no commit sha for {repo}@{branch}")
+    return sha
+
+
 def _labels_from(image_json):
     """Recursively collect any OCI Labels/labels dict from an
     `imagetools inspect --format '{{json .Image}}'` blob. Pure."""
@@ -289,8 +300,8 @@ def _render_image(root, r, model, base_url, deps):
 def _render_vllm(root, vllm_ref, model, base_url, deps):
     """Summarize vLLM commits between the pinned ref and main. Fail-soft to the
     report-only note (so vllm-node behaves as before when the compare is unavailable)."""
-    note = (f"vllm-node : pinned vLLM ref {vllm_ref}; bump settings.local.yaml "
-            f"vllm.vllm_ref + run `make vllm-node` (~30 min) to update.")
+    note = (f"vllm-node : pinned vLLM ref {vllm_ref}; run "
+            f"`sparkyard update vllm-node` to rebuild at {VLLM_REPO}@main HEAD.")
     try:
         subs, total = compare_commits(VLLM_REPO, vllm_ref, "main", deps.http_get_json)
     except Exception:
@@ -310,13 +321,33 @@ def _render_vllm(root, vllm_ref, model, base_url, deps):
         _print_raw_lines(subs, reason)
 
 
-def render_notes(root, image_results, ls_plan, *, vllm_ref=None, model=None,
-                 base_url=GATEWAY_BASE_URL, deps=REAL_NOTES):
+def _render_llamacpp(root, llamacpp_ref, model, base_url, deps):
+    note = (f"llama-cpp : pinned llama.cpp ref {llamacpp_ref}; run "
+            f"`sparkyard update llama-cpp` to rebuild at {LLAMACPP_REPO}@master HEAD.")
+    try:
+        subs, total = compare_commits(LLAMACPP_REPO, llamacpp_ref, "master", deps.http_get_json)
+    except Exception:
+        print("─ " + note)
+        return
+    if not subs:
+        print("─ " + note)
+        return
+    print(f"─ llama-cpp: {total} commit(s) since {llamacpp_ref[:9]} on {LLAMACPP_REPO}@master")
+    res, reason = _gateway_summary(root, f"llama-cpp: llama.cpp commits since {llamacpp_ref[:9]}",
+                                   commits_body(subs), model, base_url, deps)
+    if res:
+        _print_summary(res, base_url, f"from {len(subs)} of {total} commit(s) ")
+    else:
+        _print_raw_lines(subs, reason)
+
+
+def render_notes(root, image_results, ls_plan, *, vllm_ref=None, llamacpp_ref=None,
+                 model=None, base_url=GATEWAY_BASE_URL, deps=REAL_NOTES):
     """Print the '--notes' section after the update report. Never raises."""
     try:
         newer_images = [r for r in image_results if r.status == "newer"]
         ls_newer = ls_plan.get("status") == "newer"
-        if not newer_images and not ls_newer and not vllm_ref:
+        if not newer_images and not ls_newer and not vllm_ref and not llamacpp_ref:
             print("\nNothing to summarize.")
             return
         print("\nWhat these updates provide  (--notes)")
@@ -326,5 +357,7 @@ def render_notes(root, image_results, ls_plan, *, vllm_ref=None, model=None,
             _render_image(root, r, model, base_url, deps)
         if vllm_ref:
             _render_vllm(root, vllm_ref, model, base_url, deps)
+        if llamacpp_ref:
+            _render_llamacpp(root, llamacpp_ref, model, base_url, deps)
     except Exception as e:   # belt-and-suspenders: notes never break update
         print(f"  (notes unavailable: {e})")

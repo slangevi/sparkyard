@@ -136,6 +136,14 @@ def test_plan_image_updates_malformed_digest_is_error_not_newer():
     assert res["ollama"].status == "error" and res["ollama"].new_digest is None
 
 
+def test_deps_has_sourcebuilt_fields():
+    assert update.Deps._fields == (
+        "resolve_digest", "latest_release", "release_sha256",
+        "docker_pull", "docker_build",
+        "resolve_head", "commits_behind", "docker_build_arg",
+    )
+
+
 def test_manifest_digest_extracts_top_level_index_digest():
     # imagetools `{{json .Manifest}}` output: top-level .digest is the pin digest;
     # the per-arch manifests[].digest must NOT be picked.
@@ -156,11 +164,13 @@ import os
 import types
 
 
-def _settings(ref="7852e50e4"):
-    return types.SimpleNamespace(vllm=types.SimpleNamespace(vllm_ref=ref))
+def _settings(ref="7852e50e4", clone="/clone"):
+    return types.SimpleNamespace(
+        vllm=types.SimpleNamespace(vllm_ref=ref, clone_path=clone))
 
 
-def _fake_deps(resolved, latest_tag="v224", sha="e" * 64, calls=None):
+def _fake_deps(resolved, latest_tag="v224", sha="e" * 64, calls=None,
+               head="h" * 40, behind=0):
     calls = calls if calls is not None else {}
     return update.Deps(
         resolve_digest=lambda rt: resolved[rt],
@@ -168,7 +178,28 @@ def _fake_deps(resolved, latest_tag="v224", sha="e" * 64, calls=None):
         release_sha256=lambda repo, v: sha,
         docker_pull=lambda root, services: calls.setdefault("pull", []).append(services),
         docker_build=lambda root, services: calls.setdefault("build", []).append(services),
+        resolve_head=lambda repo, branch: head,
+        commits_behind=lambda repo, base, hd: behind,
+        docker_build_arg=lambda root, service, build_args:
+            calls.setdefault("build_arg", []).append((service, build_args)) or 0,
     )
+
+
+LLAMACPP_DF_REPO = """\
+FROM nvidia/cuda:13.1.0-devel@sha256:7f32
+WORKDIR /app
+# llama.cpp pinned 2026-06-01; bump via `sparkyard update llama-cpp`
+ARG LLAMA_CPP_REF=oldsha000
+RUN git clone https://github.com/ggml-org/llama.cpp src \\
+ && git -C src checkout ${LLAMA_CPP_REF}
+"""
+
+
+PROVENANCE = ("## Pinned refs (built 2026-06-11)\n\n"
+              "| Component  | Git commit  | Built artifact |\n"
+              "|------------|-------------|----------------|\n"
+              "| vLLM       | `7852e50e4` | `vllm-old.whl` |\n"
+              "| FlashInfer | `28406af5`  | `flashinfer_python-0.6.13` |\n")
 
 
 def _write_repo(tmp_path):
@@ -176,6 +207,14 @@ def _write_repo(tmp_path):
         "sha256:" + "0" * 8))  # ollama starts at sha256:00000000
     (tmp_path / "llama-swap").mkdir()
     (tmp_path / "llama-swap" / "llama-swap.Dockerfile").write_text(DOCKERFILE)
+    (tmp_path / "llama-cpp").mkdir()
+    (tmp_path / "llama-cpp" / "llama-cpp.Dockerfile").write_text(LLAMACPP_DF_REPO)
+    (tmp_path / "settings.local.yaml").write_text("llm_root: /srv\nrepo_path: /r\n")
+    (tmp_path / "tools" / "sparkyard").mkdir(parents=True)
+    (tmp_path / "tools" / "sparkyard" / "settings.py").write_text(
+        'DEFAULT_VLLM_REF = "7852e50e4"\n')
+    (tmp_path / "vllm").mkdir()
+    (tmp_path / "vllm" / "VLLM_NODE_PROVENANCE.md").write_text(PROVENANCE)
     return tmp_path
 
 
@@ -222,7 +261,10 @@ def test_run_failsoft_image_error_leaves_pin(tmp_path):
         return {"docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
                 "postgres:15-alpine": "sha256:cccc",
                 "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}[rt]
-    deps = update.Deps(resolve, lambda r: "v224", lambda r, v: "x", lambda root, s: None, lambda root, s: None)
+    deps = update.Deps(resolve, lambda r: "v224", lambda r, v: "x",
+                       lambda root, s: None, lambda root, s: None,
+                       lambda repo, b: "h" * 40, lambda repo, b, h: 0,
+                       lambda root, s, ba: 0)
     rc = update.run(str(tmp_path), _settings(), check=False, deps=deps)
     assert rc == 0
     assert "0" * 8 in (tmp_path / "docker-compose.yml").read_text()  # ollama pin untouched
@@ -320,6 +362,9 @@ def _recording_deps(resolved, latest_tag="v224", sha="e" * 64, calls=None):
         release_sha256=lambda repo, v: sha,
         docker_pull=lambda root, services: calls.setdefault("pull", []).append(services),
         docker_build=lambda root, services: calls.setdefault("build", []).append(services),
+        resolve_head=lambda repo, branch: "h" * 40,
+        commits_behind=lambda repo, base, head: 0,
+        docker_build_arg=lambda root, service, build_args: 0,
     )
 
 
@@ -373,6 +418,38 @@ def test_run_unknown_component_fails_closed(tmp_path, capsys):
     assert calls == {} or calls.get("resolved_keys") == []         # no network before abort
 
 
+LLAMACPP_DF = """\
+FROM nvidia/cuda:13.1.0-devel@sha256:7f32
+WORKDIR /app
+# llama.cpp pinned 2026-06-22; bump via `sparkyard update llama-cpp`
+ARG LLAMA_CPP_REF=abc1234def5678
+RUN git clone https://github.com/ggml-org/llama.cpp src \\
+ && git -C src checkout ${LLAMA_CPP_REF}
+"""
+
+
+def test_parse_llamacpp_pin():
+    assert update.parse_llamacpp_pin(LLAMACPP_DF) == "abc1234def5678"
+
+
+def test_parse_llamacpp_pin_raises_when_arg_missing():
+    with pytest.raises(update.UpdateError):
+        update.parse_llamacpp_pin("FROM ubuntu\nRUN echo hi\n")
+
+
+def test_rewrite_llamacpp_ref_bumps_arg_and_comment():
+    out = update.rewrite_llamacpp_ref(LLAMACPP_DF, "f" * 40, "2026-07-01")
+    assert "ARG LLAMA_CPP_REF=" + "f" * 40 in out
+    assert "abc1234def5678" not in out
+    assert "# llama.cpp pinned 2026-07-01;" in out
+    assert "2026-06-22" not in out
+
+
+def test_rewrite_llamacpp_ref_raises_when_arg_missing():
+    with pytest.raises(update.UpdateError):
+        update.rewrite_llamacpp_ref("FROM ubuntu\n", "f" * 40, "2026-07-01")
+
+
 def _img(service, repo, tag, digest, new_digest, status):
     pin = update.ImagePin(service, f"{repo}:{tag}@{digest}", repo, tag, digest)
     return update.ImageResult(pin, new_digest, status)
@@ -404,3 +481,167 @@ def test_format_report_full_output_unchanged():
         "llama-swap       v224        v226        NEWER\n"
         "\nllama-cpp : ...\nvllm-node : ...\n"
     )
+
+
+def test_plan_sourcebuilt_uptodate_when_head_starts_with_current():
+    p = update.plan_sourcebuilt("7852e50e4", "7852e50e4abcdef0000", 0)
+    assert p["status"] == "up-to-date"
+
+
+def test_plan_sourcebuilt_newer():
+    p = update.plan_sourcebuilt("7852e50e4", "ffffffff0000", 12)
+    assert p["status"] == "newer" and p["total"] == 12 and p["head"] == "ffffffff0000"
+
+
+def test_format_sourcebuilt_note_newer_mentions_count_and_command():
+    note = update.format_sourcebuilt_note(
+        "vllm-node", "main", update.plan_sourcebuilt("7852e50e4", "ffff0000", 12))
+    assert "12 commit" in note and "main" in note
+    assert "sparkyard update vllm-node" in note
+
+
+def test_format_sourcebuilt_note_uptodate():
+    note = update.format_sourcebuilt_note(
+        "llama-cpp", "master", update.plan_sourcebuilt("abc123", "abc123def", 0))
+    assert "up to date" in note.lower()
+
+
+def test_llamacpp_explicit_apply_builds_and_rewrites_on_success(tmp_path, capsys):
+    _write_repo(tmp_path)
+    calls = {}
+    resolved = {"ollama/ollama:latest": "sha256:" + "0" * 8,
+                "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+                "postgres:15-alpine": "sha256:cccc",
+                "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+    deps = _fake_deps(resolved, latest_tag="v224", calls=calls,
+                      head="newsha111" + "0" * 31, behind=5)
+    rc = update.run(str(tmp_path), _settings(), check=False, components=["llama-cpp"], deps=deps)
+    assert rc == 0
+    df = (tmp_path / "llama-cpp" / "llama-cpp.Dockerfile").read_text()
+    assert "ARG LLAMA_CPP_REF=newsha111" in df and "oldsha000" not in df
+    assert calls["build_arg"] == [("llama-server", {"LLAMA_CPP_REF": "newsha111" + "0" * 31})]
+
+
+def test_llamacpp_explicit_apply_no_write_on_build_failure(tmp_path):
+    _write_repo(tmp_path)
+    resolved = {"ollama/ollama:latest": "sha256:" + "0" * 8,
+                "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+                "postgres:15-alpine": "sha256:cccc",
+                "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+    deps = update.Deps(
+        resolve_digest=lambda rt: resolved[rt], latest_release=lambda r: "v224",
+        release_sha256=lambda r, v: "x", docker_pull=lambda root, s: None,
+        docker_build=lambda root, s: None,
+        resolve_head=lambda repo, b: "newsha111" + "0" * 31,
+        commits_behind=lambda repo, b, h: 5,
+        docker_build_arg=lambda root, service, ba: 1)  # build FAILS
+    rc = update.run(str(tmp_path), _settings(), check=False, components=["llama-cpp"], deps=deps)
+    assert rc != 0
+    assert "oldsha000" in (tmp_path / "llama-cpp" / "llama-cpp.Dockerfile").read_text()
+
+
+def test_llamacpp_allmode_reports_but_does_not_build(tmp_path):
+    _write_repo(tmp_path)
+    calls = {}
+    resolved = {"ollama/ollama:latest": "sha256:" + "0" * 8,
+                "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+                "postgres:15-alpine": "sha256:cccc",
+                "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+    deps = _fake_deps(resolved, latest_tag="v224", calls=calls,
+                      head="newsha111" + "0" * 31, behind=5)
+    rc = update.run(str(tmp_path), _settings(), check=False, deps=deps)  # no components = all
+    assert rc == 0
+    assert "build_arg" not in calls  # report-only in all-mode
+    assert "oldsha000" in (tmp_path / "llama-cpp" / "llama-cpp.Dockerfile").read_text()
+
+
+def test_llamacpp_check_reports_no_build(tmp_path):
+    _write_repo(tmp_path)
+    calls = {}
+    resolved = {"ollama/ollama:latest": "sha256:" + "0" * 8,
+                "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+                "postgres:15-alpine": "sha256:cccc",
+                "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+    deps = _fake_deps(resolved, latest_tag="v224", calls=calls,
+                      head="oldsha000abc", behind=0)  # up to date
+    rc = update.run(str(tmp_path), _settings(), check=True, components=["llama-cpp"], deps=deps)
+    assert rc == 0 and "build_arg" not in calls
+
+
+def _clone_readers():
+    files = {"/clone/wheels/.vllm-commit": "newsha111\n",
+             "/clone/wheels/.flashinfer-commit": "ffaa22\n"}
+    entries = {"/clone/wheels": [
+        "vllm-0.23.0.dev1+gnewsha111.d20260701-cp312-cp312-linux_aarch64.whl"]}
+    return (lambda p: files[p]), (lambda p: entries[p])
+
+
+def test_vllmnode_explicit_apply_syncs_four_refs_on_success(tmp_path):
+    _write_repo(tmp_path)
+    resolved = {"ollama/ollama:latest": "sha256:" + "0" * 8,
+                "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+                "postgres:15-alpine": "sha256:cccc",
+                "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+    deps = _fake_deps(resolved, latest_tag="v224", head="newsha111" + "0" * 31, behind=9)
+    read_text, listdir = _clone_readers()
+    builds = []
+    rc = update.run(str(tmp_path), _settings(), check=False, components=["vllm-node"],
+                    deps=deps, build_vllm=lambda ref: builds.append(ref) or 0,
+                    read_text=read_text, listdir=listdir)
+    assert rc == 0 and builds == ["newsha111" + "0" * 31]
+    assert "vllm_ref: newsha111" in (tmp_path / "settings.local.yaml").read_text()
+    assert 'DEFAULT_VLLM_REF = "newsha111' in (
+        tmp_path / "tools" / "sparkyard" / "settings.py").read_text()
+    prov = (tmp_path / "vllm" / "VLLM_NODE_PROVENANCE.md").read_text()
+    assert "`newsha111`" in prov and "built 2026-07-01" in prov
+
+
+def test_vllmnode_apply_no_writes_on_build_failure(tmp_path):
+    _write_repo(tmp_path)
+    resolved = {"ollama/ollama:latest": "sha256:" + "0" * 8,
+                "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+                "postgres:15-alpine": "sha256:cccc",
+                "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+    deps = _fake_deps(resolved, latest_tag="v224", head="newsha111" + "0" * 31, behind=9)
+    read_text, listdir = _clone_readers()
+    rc = update.run(str(tmp_path), _settings(), check=False, components=["vllm-node"],
+                    deps=deps, build_vllm=lambda ref: 1,  # build FAILS
+                    read_text=read_text, listdir=listdir)
+    assert rc != 0
+    assert "7852e50e4" in (tmp_path / "settings.local.yaml").read_text() or \
+           "vllm_ref" not in (tmp_path / "settings.local.yaml").read_text()
+    assert 'DEFAULT_VLLM_REF = "7852e50e4"' in (
+        tmp_path / "tools" / "sparkyard" / "settings.py").read_text()
+
+
+def test_llamacpp_missing_dockerfile_failsoft_no_build(tmp_path, capsys):
+    """If llama-cpp.Dockerfile is absent, _handle_llamacpp fails soft:
+    run() does not raise and does not build."""
+    _write_repo(tmp_path)
+    # Remove the Dockerfile so the open() call in _handle_llamacpp fails.
+    (tmp_path / "llama-cpp" / "llama-cpp.Dockerfile").unlink()
+    calls = {}
+    resolved = {"ollama/ollama:latest": "sha256:" + "0" * 8,
+                "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+                "postgres:15-alpine": "sha256:cccc",
+                "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+    deps = _fake_deps(resolved, latest_tag="v224", calls=calls,
+                      head="newsha111" + "0" * 31, behind=5)
+    rc = update.run(str(tmp_path), _settings(), check=False, components=["llama-cpp"], deps=deps)
+    assert rc == 0
+    assert "build_arg" not in calls  # no build attempted
+
+
+def test_vllmnode_allmode_reports_but_does_not_build(tmp_path):
+    _write_repo(tmp_path)
+    resolved = {"ollama/ollama:latest": "sha256:" + "0" * 8,
+                "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+                "postgres:15-alpine": "sha256:cccc",
+                "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+    deps = _fake_deps(resolved, latest_tag="v224", head="newsha111" + "0" * 31, behind=9)
+    builds = []
+    rc = update.run(str(tmp_path), _settings(), check=False, deps=deps,
+                    build_vllm=lambda ref: builds.append(ref) or 0)
+    assert rc == 0 and builds == []  # report-only in all-mode
+    assert 'DEFAULT_VLLM_REF = "7852e50e4"' in (
+        tmp_path / "tools" / "sparkyard" / "settings.py").read_text()

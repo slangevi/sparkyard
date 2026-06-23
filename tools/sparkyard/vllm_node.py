@@ -33,10 +33,10 @@ def build_plan(cfg, variants, ref, clone_exists):
         steps.append(Step("clone upstream", None,
                           ["git", "clone", cfg.upstream, cfg.clone_path]))
 
-    # base/tf5 build at the settings/override ref; mxfp4 tracks its own ref.
-    if any(v in _REF_VARIANTS for v in variants):
-        steps.append(Step("checkout ref", cfg.clone_path, ["git", "checkout", ref]))
-
+    # `ref` is a vLLM commit, NOT a spark-vllm-docker commit: build-and-copy.sh
+    # checks vLLM out itself via --vllm-ref (below). The tooling clone stays at its
+    # cloned HEAD — never `git checkout <ref>` here (that ref isn't in this repo and
+    # the checkout would abort the build on a fresh clone). mxfp4 tracks its own ref.
     for v in variants:
         if v == "mxfp4":
             argv = ["./build-and-copy.sh", "--exp-mxfp4"]

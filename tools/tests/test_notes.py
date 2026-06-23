@@ -278,4 +278,34 @@ def test_render_vllm_failsoft_on_compare_error(tmp_path, capsys):
     notes.render_notes(str(tmp_path), [], {"status": "up-to-date"},
                        vllm_ref="7852e50e4", deps=deps)
     out = capsys.readouterr().out
-    assert "vllm-node" in out and "vllm.vllm_ref" in out   # report-only note, no crash
+    assert "vllm-node" in out and "sparkyard update vllm-node" in out  # report-only note, no crash
+
+
+def test_resolve_head_returns_sha():
+    from sparkyard import notes
+    calls = {}
+    def fake_get(url):
+        calls["url"] = url
+        return {"sha": "a1b2c3d4e5f6", "commit": {}}
+    sha = notes.resolve_head("ggml-org/llama.cpp", "master", fake_get)
+    assert sha == "a1b2c3d4e5f6"
+    assert calls["url"] == "https://api.github.com/repos/ggml-org/llama.cpp/commits/master"
+
+
+def test_resolve_head_raises_on_missing_sha():
+    from sparkyard import notes
+    import pytest
+    with pytest.raises(notes.UpdateNotesError):
+        notes.resolve_head("o/r", "main", lambda url: {"no_sha": 1})
+
+
+def test_render_notes_includes_llamacpp_when_ref_given(capsys):
+    from sparkyard import notes
+    deps = notes.NotesDeps(
+        http_get_json=lambda url: {"total_commits": 3, "commits": [
+            {"commit": {"message": "fix: a thing"}}]},
+        gateway_chat=lambda *a, **k: (_ for _ in ()).throw(Exception("no gw")),
+        list_models=lambda *a, **k: [], image_labels=lambda *a, **k: {})
+    notes.render_notes("/r", [], {}, llamacpp_ref="oldsha", deps=deps)
+    out = capsys.readouterr().out
+    assert "llama-cpp" in out

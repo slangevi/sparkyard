@@ -198,6 +198,9 @@ few things non-obvious:
   blank-line pitfall that would otherwise split it.)
 - **llama.cpp needs `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` and `--no-mmap`** (mmap is
   unsafe on unified memory).
+- **llama-cpp is pinned to a recorded commit ref** (in `llama-cpp/llama-cpp.Dockerfile`)
+  rather than floating to HEAD; run `sparkyard update llama-cpp` to check for new commits
+  and rebuild at the latest `ggml-org/llama.cpp@master`.
 - **Large models (120B+) need a generous `ready_timeout`** (1800s+); a 90 GB weight
   load far exceeds the default.
 

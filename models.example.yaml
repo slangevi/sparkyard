@@ -30,6 +30,12 @@ defaults:
     n_gpu_layers: 99
     parallel: 4
 
+# Sizing on unified memory: `gmem.max` is a RESERVATION, not a ceiling — vLLM
+# takes the whole fraction as system RAM. Peak ~= 20.5GB + gmem x 111.51GB on a
+# 128GB GB10. Avoid `--load-format fastsafetensors`: it buffers the full weight
+# set during load (measured 86GB peak vs 54GB without on a 21.8GB model).
+# See the README's "GB10 / unified-memory gotchas" section; `sparkyard doctor`
+# flags both.
 models:
   # ---- vLLM (safetensors) ----
   - name: Qwen2.5-3B-Instruct

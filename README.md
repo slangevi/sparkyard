@@ -80,13 +80,13 @@ curl http://localhost:14000/v1/chat/completions \
 | `sparkyard validate` | Structurally validate `models.yaml` + settings (fail-closed). |
 | `sparkyard render` | Regenerate the live configs from the SSOT. |
 | `sparkyard build` | Build the local llama-cpp + llama-swap images. |
-| `sparkyard vllm-node [--variant mxfp4] [--print]` | Clone + build the vLLM serving image(s) for SM121 (base + tf5 by default). |
+| `sparkyard vllm-node [--variant mxfp4] [--use-wheels] [--print]` | Clone + build the vLLM serving image(s) for SM121 (base + tf5 by default). `--use-wheels` builds only the runner from prebuilt, pre-resolved wheels — minutes instead of ~30, and it sidesteps source-build dependency conflicts, but installs whatever version the wheels carry rather than a requested `--vllm-ref`. |
 | `sparkyard start` / `sparkyard stop` | Start (`docker compose up -d`) / stop (`docker compose down`) the stack. |
 | `sparkyard doctor` | Advisory on-disk report: which models' weights are present. |
 | `sparkyard add-model <org/model> [--download] [--gguf-file <pat>]` | Introspect a HF repo (vLLM or GGUF), append an entry to `models.yaml`, render, optionally download. |
 | `sparkyard download [--model <name>]` | Fetch HF weights for `models.yaml` entries that carry `hf_repo`. |
 | `sparkyard update [COMPONENT]... [--check] [--notes]` | Check for + apply upstream component updates (`--check` = dry-run; `--notes` summarizes release/commit notes — llama-swap, litellm, open-webui, vllm-node — via your local gateway, each with an Apply/Review-first recommendation). Name one or more components (`ollama litellm litellm-db open-webui llama-swap llama-cpp vllm-node`) to scope the run; no names = all. |
-| `sparkyard bench [--mode speed]` | Benchmark each served model — quality (tool-eval-bench) or speed (llama-benchy). |
+| `sparkyard bench [--mode speed]` | Benchmark each served model — quality (tool-eval-bench) or speed (llama-benchy). Scope it with `MODELS="a b"`; unscoped it loads **every** model on disk in turn, which on unified memory is a real memory event, not just a slow one. Unknown names exit 2. |
 
 **`make` aliases:** every command above also works as `make <cmd>` (e.g. `make
 render`, `make start`) for muscle memory. `make venv` (bootstrap the project venv

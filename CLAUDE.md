@@ -71,6 +71,8 @@ sparkyard start       # docker compose up -d   (sparkyard stop = down)
 sparkyard update [components...] --check [--notes]   # preview updates (--notes: gateway summary); name components to scope (default: all)
 sparkyard doctor      # advisory on-disk model report
 sparkyard download / add-model / vllm-node / bench / validate
+sparkyard vllm-node --use-wheels     # runner from prebuilt wheels (~10 min, not ~30)
+MODELS="name" sparkyard bench        # scope the sweep; unscoped loads every model
 make venv / test / lint    # bootstrap + dev (make-only)
 ```
 

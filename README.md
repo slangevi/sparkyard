@@ -192,6 +192,25 @@ few things non-obvious:
 - **~126.5 GB of used RAM crashes the box.** `launch.py` reserves headroom
   against a `SYSTEM_RAM_CEILING_GIB` (default 117.81 GiB) so it never plans past
   that, even when `/proc/meminfo` reports more free.
+- **`gpu_memory_utilization` is a reservation, not a ceiling.** vLLM reserves the
+  whole fraction as real system RAM, whether or not it needs it — on unified
+  memory that comes straight out of the 128 GB you share with everything else.
+  Peak RAM tracks it linearly, so `gmem` is arithmetic rather than guesswork:
+
+  ```
+  peak ≈ fixed_overhead + gmem × (SYSTEM_RAM_CEILING_GIB − cuda_overhead)
+       ≈ 20.5 GB        + gmem × 111.51 GB          # measured on a 128 GB GB10
+  ```
+
+  Measured points on one box: `gmem 0.30 → 54 GB`, `gmem 0.70 → 98 GB`. Raising
+  `gmem` to win back KV cache costs system RAM one-for-one. `sparkyard doctor`
+  warns when a model's weights alone exceed its budget.
+- **Avoid `--load-format fastsafetensors` on unified memory.** It buffers the
+  whole weight set while CUDA reserves its budget, so both live in the same pool
+  at once. Measured on a 21.8 GiB model, one flag changed: **86 GiB peak with it,
+  54 GiB without** — enough to cross the crash threshold mid-load on a model that
+  otherwise fits comfortably. The cost scales with weight size, so the largest
+  models are the most exposed. `sparkyard doctor` flags it.
 - **Don't hand-edit the generated `llama-swap/config.yaml`** — it's regenerated
   from `models.yaml` by `sparkyard render`. (The generator emits each launcher
   invocation as one folded `cmd:` line and is test-guarded against a YAML

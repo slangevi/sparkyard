@@ -9,6 +9,58 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-23
+
+Three bugs surfaced while bringing a new hybrid-attention model up on a DGX Spark
+(GB10), plus the two capabilities their diagnosis showed were missing. The theme
+is the same in each case: something reported success, or did nothing at all,
+while the caller believed work had happened.
+
+### Fixed
+
+- **KV cache sized from attention layers, not every layer.** `auto-gmem` computed
+  the cache as if all `num_hidden_layers` held a per-token KV cache. Hybrid models
+  interleave linear-attention layers (Gated DeltaNet / Mamba) carrying a small
+  fixed recurrent state instead, so the estimate ran high by the attention
+  interval — 4x on a 64-layer/16-attending model, inflating `need` to 89.81GiB
+  against a true 41.81GiB and pinning `gpu_memory_utilization` to `GMEM_MAX`.
+  `parse_config` now detects the attending-layer count from `layer_types`,
+  `full_attention_interval`, or `hybrid_override_pattern` (nemotron_h), falling
+  back conservatively to every layer for dense models. Corroborated against
+  vLLM's own accounting: it reports 4.57GiB to serve one 131072-token sequence
+  where the corrected formula predicts 4.29GiB and the old one predicted 17.2GiB.
+- **The `vllm-node` tooling clone now advances after fetching.** `build_plan` ran
+  `git fetch` on the `spark-vllm-docker` clone and never used it, so every build
+  ran from whatever HEAD the clone was created with. A clone found 101 commits
+  behind upstream was missing an upstream flashinfer build fix; the build
+  compiled kernels for ~17 minutes and then died on an unsatisfiable
+  `flashinfer-python` / `nvidia-cutlass-dsl` resolve. A `git merge --ff-only`
+  step now runs between fetch and build; `--ff-only` keeps it fail-closed so a
+  diverged or dirty clone stops the build rather than silently building
+  something else.
+- **`bench.sh` no longer sweeps every discovered model unconditionally.** It
+  benchmarked every id from `/v1/models` with no way to narrow the run. On a
+  unified-memory box that is unsafe rather than merely slow: llama-swap pages in
+  each model in turn, so a bench run on a 21-model gateway loads every model on
+  disk one after another. It also burned a warmup timeout on each model with no
+  weights on disk.
+
+### Added
+
+- **`sparkyard vllm-node --use-wheels`.** Builds only the runner image from
+  prebuilt, pre-resolved vLLM and FlashInfer wheels instead of compiling vLLM
+  from source: 11:15 against ~30 min, and it sidesteps the dependency conflict
+  that fails the source path, because the published wheels are already resolved
+  against each other. Not a faster route to an arbitrary `--vllm-ref` — it
+  installs whatever version the wheels carry, which is the combination upstream
+  has tested on this hardware.
+- **`MODELS=` scoping for `sparkyard bench`.** `MODELS="a b" sparkyard bench`
+  restricts the sweep to named models. Unknown names exit 2 and list what is
+  available, so a typo cannot silently widen the run to everything; omitting
+  `MODELS` keeps the previous behaviour.
+- **`--print` reports `attn_layers`** alongside `layers`, so the sizing decision
+  is inspectable without a load.
+
 ## [1.4.0] - 2026-06-22
 
 This release makes `sparkyard update` *apply* updates for the two source-built
@@ -169,6 +221,7 @@ NVIDIA DGX Spark (GB10).
   engines bind `127.0.0.1` and Postgres has no host port. Service healthchecks +
   `service_healthy` startup ordering.
 
+[1.5.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.5.0
 [1.4.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.4.0
 [1.3.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.3.0
 [1.2.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.2.0

@@ -90,7 +90,8 @@ def _dispatch(args):
             print(f"✗ {e}", file=sys.stderr)
             return 1
         return update.run(root, settings, check=args.check, notes=args.notes,
-                          model=args.model, components=args.components)
+                          model=args.model,
+                          use_wheels=getattr(args, "use_wheels", False), components=args.components)
 
     if args.cmd in ("init", "secrets", "build", "start", "stop", "bench"):
         from . import ops
@@ -279,8 +280,12 @@ def vllm_node(obj, variant, vllm_ref, use_wheels, dry_run):
               help="Summarize what the updates provide (via the local gateway; raw notes if it's down).")
 @click.option("--model", default=None,
               help="Gateway model for the --notes summary (default: first from /v1/models).")
+@click.option("--use-wheels", is_flag=True,
+              help="vllm-node only: rebuild from prebuilt wheels (~10 min, not ~30). "
+                   "The wheel set fixes the version, so it may trail main; the pin "
+                   "records what was actually built.")
 @click.pass_obj
-def update(obj, components, check, notes, model):
+def update(obj, components, check, notes, model, use_wheels):
     """Check for + apply upstream component updates (never floats pins).
 
     With no COMPONENT args, checks/updates everything. Name one or more to scope
@@ -289,7 +294,7 @@ def update(obj, components, check, notes, model):
     named explicitly; a bare `update` reports them without building.
     """
     return _dispatch(_ns(obj, "update", components=components, check=check,
-                         notes=notes, model=model))
+                         notes=notes, model=model, use_wheels=use_wheels))
 
 
 @cli.command()

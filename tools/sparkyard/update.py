@@ -224,11 +224,12 @@ REAL = Deps(_resolve_digest, _latest_release, _release_sha256, _docker_pull, _do
             _resolve_head, _commits_behind, _docker_build_arg)
 
 
-def _build_vllm(root, ref):
+def _build_vllm(root, ref, use_wheels=False):
     import types as _t
     from . import vllm_node, settings as _settings_mod
     s = _settings_mod.Settings.load(os.path.join(root, "settings.local.yaml"))
-    args = _t.SimpleNamespace(variant=None, vllm_ref=ref, dry_run=False)
+    args = _t.SimpleNamespace(variant=None, vllm_ref=ref, dry_run=False,
+                              use_wheels=use_wheels)
     return vllm_node.run(args, s)
 
 
@@ -336,7 +337,7 @@ def _handle_llamacpp(root, *, check, explicit, deps, today):
 
 
 def _handle_vllmnode(root, settings, *, check, explicit, deps, build_vllm,
-                     read_text, listdir, vllm_pin):
+                     read_text, listdir, vllm_pin, use_wheels=False):
     current = settings.vllm.vllm_ref
     plan, head = _handle_sourcebuilt_plan(_notes.VLLM_REPO, "main", current, deps)
     if plan is None:
@@ -344,29 +345,41 @@ def _handle_vllmnode(root, settings, *, check, explicit, deps, build_vllm,
     note = format_sourcebuilt_note("vllm-node", "main", plan)
     if check or not explicit or plan["status"] != "newer":
         return note, None, plan["status"]
-    print(f"… rebuilding vllm-node at {_short(head)} on {_notes.VLLM_REPO}@main "
-          f"(~30 min).")
-    rc = build_vllm(head)
+    if use_wheels:
+        # Wheels install whatever the published set carries, so this cannot land
+        # on `head`; say so rather than implying it does.
+        print("… rebuilding vllm-node from published wheels (~10 min); the wheel "
+              "set determines the version, which may trail main.")
+    else:
+        print(f"… rebuilding vllm-node at {_short(head)} on {_notes.VLLM_REPO}@main "
+              f"(~30 min).")
+    rc = build_vllm(head, use_wheels)
     if rc == 0:
         # Clone artifacts use the injected readers (the clone is faked in tests);
         # the repo's own settings/provenance files are read with plain open().
         built = vllm_pin.read_built_refs(settings.vllm.clone_path, read_text, listdir)
+        # A wheels build did not honour `head`; pin what actually landed so the
+        # recorded ref matches the image. Fall back to head if unreadable.
+        pin = (built.vllm or head) if use_wheels else head
+        if use_wheels and built.vllm:
+            print(f"  installed vllm at {_short(built.vllm)} (published wheel set)")
         sl = os.path.join(root, "settings.local.yaml")
         sp = os.path.join(root, "tools", "sparkyard", "settings.py")
         pv = os.path.join(root, "vllm", "VLLM_NODE_PROVENANCE.md")
-        _atomic_write(sl, vllm_pin.upsert_settings_local_ref(open(sl).read(), head))
-        _atomic_write(sp, vllm_pin.rewrite_default_ref(open(sp).read(), head))
+        _atomic_write(sl, vllm_pin.upsert_settings_local_ref(open(sl).read(), pin))
+        _atomic_write(sp, vllm_pin.rewrite_default_ref(open(sp).read(), pin))
         _atomic_write(pv, vllm_pin.rewrite_provenance(open(pv).read(), built))
     return note, rc, plan["status"]
 
 
 def run(root, settings, *, check=False, notes=False, model=None, components=None,
-        deps=REAL, build_vllm=None, read_text=None, listdir=None):
+        deps=REAL, build_vllm=None, read_text=None, listdir=None,
+        use_wheels=False):
     """Check/apply component updates. Returns 0 on success (incl. nothing-to-do),
     1 if an apply-phase rewrite/IO step fails. Per-image registry lookups are
     fail-soft; side effects are injected via `deps` for testability."""
     today = datetime.date.today().isoformat()
-    build_vllm = build_vllm or (lambda ref: _build_vllm(root, ref))
+    build_vllm = build_vllm or (lambda ref, uw=False: _build_vllm(root, ref, uw))
     read_text = read_text or (lambda p: open(p).read())
     listdir = listdir or os.listdir
     from . import vllm_pin  # lazy import to avoid cycle (vllm_pin imports update)
@@ -421,7 +434,8 @@ def run(root, settings, *, check=False, notes=False, model=None, components=None
     if want("vllm-node"):
         vllm_note, vllm_rc, vllm_status = _handle_vllmnode(
             root, settings, check=check, explicit=explicit("vllm-node"), deps=deps,
-            build_vllm=build_vllm, read_text=read_text, listdir=listdir, vllm_pin=vllm_pin)
+            build_vllm=build_vllm, read_text=read_text, listdir=listdir,
+            vllm_pin=vllm_pin, use_wheels=use_wheels)
     print(format_report(image_results, ls_plan, llamacpp_note, vllm_note))
     if notes:
         lcpp_ref = None

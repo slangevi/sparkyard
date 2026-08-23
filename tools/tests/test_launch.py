@@ -49,14 +49,14 @@ def test_parse_config_prefers_text_config(tmp_path):
            "text_config": {"num_hidden_layers": 32, "num_attention_heads": 32,
                            "num_key_value_heads": 8, "hidden_size": 4096}}
     d = _model_dir(tmp_path, cfg, 1)
-    n_layers, n_heads, n_kv, head_dim = launch.parse_config(d)
+    n_layers, n_heads, n_kv, head_dim, _ = launch.parse_config(d)
     assert (n_layers, n_heads, n_kv, head_dim) == (32, 32, 8, 128)  # head_dim = 4096/32
 
 
 def test_parse_config_mha_fallback_when_no_kv(tmp_path):
     cfg = {"num_hidden_layers": 16, "num_attention_heads": 16, "head_dim": 64}
     d = _model_dir(tmp_path, cfg, 1)
-    _, n_heads, n_kv, head_dim = launch.parse_config(d)
+    _, n_heads, n_kv, head_dim, _ = launch.parse_config(d)
     assert n_kv == 16 and head_dim == 64  # n_kv defaults to n_heads
 
 
@@ -174,7 +174,7 @@ def test_parse_config_accepts_float_head_dim(tmp_path):
     cfg = {"num_hidden_layers": 16, "num_attention_heads": 16,
            "num_key_value_heads": 4, "hidden_size": 1024, "head_dim": 64.0}
     d = _model_dir(tmp_path, cfg, 1)
-    _, _, n_kv, head_dim = launch.parse_config(d)
+    _, _, n_kv, head_dim, _ = launch.parse_config(d)
     assert n_kv == 4 and head_dim == 64
 
 
@@ -190,3 +190,85 @@ def test_build_argv_requires_llm_root(monkeypatch):
 def test_read_meminfo_missing_file_exits(tmp_path):
     with pytest.raises(SystemExit):
         launch.read_meminfo(str(tmp_path / "nope"))
+
+
+# --- hybrid attention: only full-attention layers hold a KV cache -------------
+# Qwen3.5/3.6/3.8 (`qwen3_5`) interleave Gated DeltaNet ("linear_attention")
+# with a full-attention layer every `full_attention_interval`. Sizing KV off
+# num_hidden_layers overestimates by that interval (4x on Qwen3.8-27B) and
+# drives gpu_memory_utilization high enough to OOM a 128 GB unified-memory box.
+
+def test_parse_config_counts_only_full_attention_layers_from_layer_types(tmp_path):
+    layer_types = ["linear_attention", "linear_attention",
+                   "linear_attention", "full_attention"] * 16   # 64 layers, 16 full
+    cfg = {"text_config": {"num_hidden_layers": 64, "num_attention_heads": 24,
+                           "num_key_value_heads": 4, "head_dim": 256,
+                           "layer_types": layer_types}}
+    d = _model_dir(tmp_path, cfg, 1)
+    n_layers, _, _, _, n_attn = launch.parse_config(d)
+    assert (n_layers, n_attn) == (64, 16)
+
+
+def test_parse_config_counts_only_full_attention_layers_from_interval(tmp_path):
+    # No layer_types list; the interval alone must be honoured.
+    cfg = {"text_config": {"num_hidden_layers": 64, "num_attention_heads": 24,
+                           "num_key_value_heads": 4, "head_dim": 256,
+                           "full_attention_interval": 4}}
+    d = _model_dir(tmp_path, cfg, 1)
+    n_layers, _, _, _, n_attn = launch.parse_config(d)
+    assert (n_layers, n_attn) == (64, 16)
+
+
+def test_parse_config_dense_model_counts_every_layer_as_attention(tmp_path):
+    cfg = {"num_hidden_layers": 32, "num_attention_heads": 32,
+           "num_key_value_heads": 8, "hidden_size": 4096}
+    d = _model_dir(tmp_path, cfg, 1)
+    n_layers, _, _, _, n_attn = launch.parse_config(d)
+    assert (n_layers, n_attn) == (32, 32)
+
+
+def test_compute_gmem_sizes_kv_from_attention_layers_only():
+    # Qwen3.8-27B shape: 64 layers / 16 full-attention, 4 kv heads, head_dim 256,
+    # ctx 131072, kv_batch 4, fp8 KV. All 64 layers => 64.00 GiB; 16 => 16.00 GiB.
+    params = launch.Params(max_model_len=131072, max_num_seqs=4, kv_dtype_bytes=1,
+                           gmin=0.45, gmax=0.70, safety=4.0, cuda_overhead=6.3,
+                           ceiling=117.81, kv_batch_realistic=4, free_buffer=5.0,
+                           weights=21.81)
+    meminfo = (124 * 1048576, 100 * 1048576, 100 * 1048576)
+    _, _, hybrid = launch.compute_gmem((64, 24, 4, 256, 16), params, meminfo)
+    assert hybrid["kv"] == 16.00
+    assert hybrid["attn_layers"] == 16
+
+
+def test_compute_gmem_accepts_legacy_four_tuple_as_all_attention():
+    params = launch.Params(max_model_len=131072, max_num_seqs=4, kv_dtype_bytes=1,
+                           gmin=0.45, gmax=0.70, safety=4.0, cuda_overhead=6.3,
+                           ceiling=117.81, kv_batch_realistic=4, free_buffer=5.0,
+                           weights=21.81)
+    meminfo = (124 * 1048576, 100 * 1048576, 100 * 1048576)
+    _, _, d = launch.compute_gmem((64, 24, 4, 256), params, meminfo)
+    assert d["kv"] == 64.00
+
+
+# --- hybrid attention, Nemotron-H flavour ------------------------------------
+# nemotron_h has no layer_types/full_attention_interval; it encodes the stack as
+# hybrid_override_pattern where '*' = attention, 'M' = Mamba, '-' = MLP.
+
+def test_parse_config_counts_attention_layers_from_hybrid_override_pattern(tmp_path):
+    cfg = {"num_hidden_layers": 42, "num_attention_heads": 40,
+           "num_key_value_heads": 8, "head_dim": 128,
+           "hybrid_override_pattern": "M-M-M-MM-M-M*-M-M*-M-M-M*-M-M-MM*-MMM-M-M-"}
+    d = _model_dir(tmp_path, cfg, 1)
+    n_layers, _, _, _, n_attn = launch.parse_config(d)
+    assert (n_layers, n_attn) == (42, 4)
+
+
+def test_parse_config_pattern_without_attention_marker_falls_back_to_all_layers(tmp_path):
+    # A pattern we cannot interpret must never yield 0 attention layers, which
+    # would size the KV cache to nothing. Fall back to the conservative count.
+    cfg = {"num_hidden_layers": 12, "num_attention_heads": 8,
+           "num_key_value_heads": 8, "head_dim": 64,
+           "hybrid_override_pattern": "MMMMMMMMMMMM"}
+    d = _model_dir(tmp_path, cfg, 1)
+    n_layers, _, _, _, n_attn = launch.parse_config(d)
+    assert (n_layers, n_attn) == (12, 12)

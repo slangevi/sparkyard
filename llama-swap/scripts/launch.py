@@ -111,6 +111,41 @@ def _extract(cfg, key):
     return v if v is not None else 0
 
 
+def _extract_raw(cfg, key):
+    """Like _extract but returns the raw value (lists, etc.), or None."""
+    tc = cfg.get("text_config")
+    if isinstance(tc, dict) and key in tc:
+        return tc[key]
+    return cfg.get(key)
+
+
+def _attention_layers(cfg, n_layers):
+    """Number of layers that actually hold a KV cache.
+
+    Hybrid models (Qwen3.5/3.6/3.8 `qwen3_5`) interleave linear-attention
+    (Gated DeltaNet) layers, which carry a small fixed recurrent state instead
+    of a per-token KV cache, with a full-attention layer every
+    `full_attention_interval`. Counting all `num_hidden_layers` overestimates
+    the KV cache by that interval. Dense models fall through to n_layers."""
+    types = _extract_raw(cfg, "layer_types")
+    if isinstance(types, list) and types:
+        n = sum(1 for t in types if t == "full_attention")
+        if n:
+            return n
+    interval = _extract(cfg, "full_attention_interval")
+    if interval > 1:
+        n = n_layers // interval
+        if n:
+            return n
+    # nemotron_h: '*' = attention, 'M' = Mamba, '-' = MLP.
+    pattern = _extract_raw(cfg, "hybrid_override_pattern")
+    if isinstance(pattern, str):
+        n = pattern.count("*")
+        if n:
+            return n
+    return n_layers
+
+
 def parse_config(model_host_path):
     cfgp = Path(model_host_path) / "config.json"
     if not cfgp.is_file():
@@ -130,7 +165,7 @@ def parse_config(model_host_path):
         head_dim = int(hidden / n_heads)
     if n_layers == 0 or head_dim == 0 or n_kv == 0:
         _fatal(f"[auto-gmem] FATAL: could not parse layers/heads/head_dim from {cfgp}")
-    return n_layers, n_heads, n_kv, head_dim
+    return n_layers, n_heads, n_kv, head_dim, _attention_layers(cfg, n_layers)
 
 
 def read_meminfo(path=None):
@@ -156,12 +191,13 @@ def read_meminfo(path=None):
 def compute_gmem(cfg_vals, params, meminfo):
     """Return (gmem: float|None, mode: str, diag: dict). mode in
     {sized, fallback, ERR}. Faithful to the bash awk pipeline."""
-    n_layers, n_heads, n_kv, head_dim = cfg_vals
+    n_layers, n_heads, n_kv, head_dim = cfg_vals[:4]
+    n_attn = cfg_vals[4] if len(cfg_vals) > 4 else n_layers
     p = params
     mem_total_kb, mem_avail_kb, mem_free_kb = meminfo
 
     kv_batch = min(p.max_num_seqs, p.kv_batch_realistic)
-    kv = g2((2 * n_layers * n_kv * head_dim * p.max_model_len * kv_batch * p.kv_dtype_bytes) / GIB)
+    kv = g2((2 * n_attn * n_kv * head_dim * p.max_model_len * kv_batch * p.kv_dtype_bytes) / GIB)
     need = g2(p.weights + kv + p.safety)
 
     mt_raw = g2(mem_total_kb / 1048576)
@@ -172,7 +208,8 @@ def compute_gmem(cfg_vals, params, meminfo):
     total = g2(mt_capped - p.cuda_overhead)
     free = g2(max(0.0, ma_raw - headroom - p.cuda_overhead))
 
-    diag = {"layers": n_layers, "kv_heads": n_kv, "head_dim": head_dim,
+    diag = {"layers": n_layers, "attn_layers": n_attn,
+            "kv_heads": n_kv, "head_dim": head_dim,
             "ctx": p.max_model_len, "batch": p.max_num_seqs, "kvb": p.kv_dtype_bytes,
             "kv_batch": kv_batch, "weights": p.weights, "kv": kv, "safety": p.safety,
             "need": need, "mt": mt_raw, "mf": mf_raw, "ma": ma_raw, "ceiling": p.ceiling,
@@ -286,7 +323,8 @@ def main(argv=None):
             _fatal(f"[auto-gmem] FATAL: free VRAM below GMEM_MIN floor — "
                    f"cap={d['u_cap']:.2f} gmin={params.gmin:.2f} free={d['free']:.2f}")
         sys.stderr.write(
-            f"[auto-gmem] cfg: layers={d['layers']} kv_heads={d['kv_heads']} "
+            f"[auto-gmem] cfg: layers={d['layers']} attn_layers={d['attn_layers']} "
+            f"kv_heads={d['kv_heads']} "
             f"head_dim={d['head_dim']} ctx={d['ctx']} batch={d['batch']} "
             f"kvb={d['kvb']} kv_batch_used={d['kv_batch']}\n")
         sys.stderr.write(

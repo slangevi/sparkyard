@@ -105,7 +105,7 @@ def test_exec_runs_steps_in_order_until_failure():
                        which=lambda t: "/usr/bin/" + t,
                        exec_step=exec_step)
     assert rc == 1
-    assert seen == ["fetch upstream", "build base"]  # stops at the failing step
+    assert seen == ["fetch upstream", "update tooling clone", "build base"]  # stops at the failing step
 
 
 def test_clone_existence_checks_dot_git():
@@ -125,3 +125,62 @@ def test_variant_arg_selects_single_variant():
                   exec_step=lambda step: seen.append(step.description) or 0)
     assert "build mxfp4" in seen
     assert "build base" not in seen
+
+
+# --- the tooling clone must actually advance after fetching ------------------
+# `git fetch` alone leaves the clone at its old HEAD, so the build uses whatever
+# spark-vllm-docker was cloned months ago. Observed in the field: a clone 101
+# commits behind lacked "Fix flashinfer build issues", and the build died at
+# `uv pip install` on an unsatisfiable flashinfer/nvidia-cutlass-dsl conflict.
+
+def test_build_plan_advances_tooling_clone_after_fetch():
+    plan = vllm_node.build_plan(CFG, ["base"], "7852e50e4", clone_exists=True)
+    argvs = _argvs(plan)
+    ff = [a for a in argvs if a[:2] == ["git", "merge"]]
+    assert ff, f"no fast-forward step in plan: {argvs}"
+    assert "--ff-only" in ff[0], "clone must advance by fast-forward only"
+    # and it must happen after the fetch, before any build
+    i_fetch = argvs.index(["git", "fetch"])
+    i_ff = argvs.index(ff[0])
+    i_build = next(i for i, a in enumerate(argvs) if a[0] == "./build-and-copy.sh")
+    assert i_fetch < i_ff < i_build
+
+
+def test_fresh_clone_needs_no_fast_forward():
+    # A just-cloned repo is already at the default branch tip.
+    argvs = _argvs(vllm_node.build_plan(CFG, ["base"], "7852e50e4", clone_exists=False))
+    assert not any(a[:2] == ["git", "merge"] for a in argvs)
+
+
+def test_advancing_the_clone_is_not_a_vllm_ref_checkout():
+    # Guard the PR #11 regression: advancing the tooling clone must not reintroduce
+    # `git checkout <vllm ref>`, which aborts on a fresh clone.
+    argvs = _argvs(vllm_node.build_plan(CFG, ["base"], "abc1234", clone_exists=True))
+    assert not any(a[:2] == ["git", "checkout"] for a in argvs)
+    assert not any("abc1234" in a for a in argvs if a[0] == "git")
+
+
+# --- --use-wheels: build the runner from prebuilt, pre-resolved wheels -------
+# Source builds take ~30 min and can fail on dependency conflicts that the
+# published wheel set has already resolved. --use-wheels built in 11:15 and
+# installed the same flashinfer 0.6.18 that the source path could not satisfy.
+
+def test_use_wheels_threads_into_build():
+    plan = vllm_node.build_plan(CFG, ["base"], "7852e50e4", clone_exists=True,
+                                use_wheels=True)
+    build = [a for a in _argvs(plan) if a[0] == "./build-and-copy.sh"][0]
+    assert "--use-wheels" in build
+
+
+def test_use_wheels_defaults_off():
+    plan = vllm_node.build_plan(CFG, ["base"], "7852e50e4", clone_exists=True)
+    build = [a for a in _argvs(plan) if a[0] == "./build-and-copy.sh"][0]
+    assert "--use-wheels" not in build
+
+
+def test_use_wheels_applies_to_every_variant():
+    plan = vllm_node.build_plan(CFG, ["base", "tf5"], "7852e50e4", clone_exists=True,
+                                use_wheels=True)
+    builds = [a for a in _argvs(plan) if a[0] == "./build-and-copy.sh"]
+    assert len(builds) == 2
+    assert all("--use-wheels" in b for b in builds)

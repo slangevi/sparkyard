@@ -38,14 +38,34 @@ if ! tool_present; then
   exit 0
 fi
 
-MODELS=$(curl -fsS "$BASE_URL/v1/models" 2>/dev/null \
+DISCOVERED=$(curl -fsS "$BASE_URL/v1/models" 2>/dev/null \
   | python3 -c 'import sys,json; print("\n".join(sorted(m["id"] for m in json.load(sys.stdin)["data"])))' 2>/dev/null)
-if [ -z "$MODELS" ]; then
+if [ -z "$DISCOVERED" ]; then
   echo "${RED}no models discovered at $BASE_URL/v1/models — is the stack up?${NC}" >&2
   exit 1
 fi
 
-OUT_DIR="$REPO_ROOT/test-results/bench-$(date -u +%Y%m%dT%H%M%SZ)"
+# MODELS= scopes the sweep. Unscoped, every discovered id is benchmarked, which
+# on a unified-memory box means loading each in turn — including models far too
+# large to be swept casually. Fail closed on an unknown name so a typo does not
+# silently widen the run to everything.
+if [ -n "${MODELS:-}" ]; then
+  WANTED=$(printf '%s\n' $MODELS)
+  MISSING=""
+  for w in $WANTED; do
+    printf '%s\n' "$DISCOVERED" | grep -qxF "$w" || MISSING="$MISSING $w"
+  done
+  if [ -n "$MISSING" ]; then
+    echo "${RED}unknown model(s):$MISSING${NC}" >&2
+    echo "available:" >&2; printf '%s\n' "$DISCOVERED" | sed 's/^/  - /' >&2
+    exit 2
+  fi
+  MODELS=$(printf '%s\n' $WANTED)
+else
+  MODELS="$DISCOVERED"
+fi
+
+OUT_DIR="${OUT_DIR:-$REPO_ROOT/test-results/bench-$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$OUT_DIR"
 SUMMARY="$OUT_DIR/SUMMARY.txt"; : > "$SUMMARY"
 echo "${BOLD}sparkyard bench — MODE=$MODE  BASE_URL=$BASE_URL${NC}"

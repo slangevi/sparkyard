@@ -9,6 +9,37 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Added
+
+- **`sparkyard doctor` warns on `--load-format fastsafetensors`.** It buffers the
+  whole weight set while CUDA reserves the gmem budget; measured +32GiB peak
+  (86 vs 54) on a 21.8GiB model with one flag changed. On unified memory both
+  allocations come out of the same pool, so this can cross the crash threshold
+  mid-load on a model that otherwise fits.
+- **`sparkyard doctor` warns when a model's weights exceed its gmem budget.**
+  `gmem.max` caps what vLLM may reserve and vLLM reserves the whole fraction, so
+  weights that do not fit inside it cannot load — cheap to catch on disk rather
+  than ten minutes into a cold start.
+
+### Changed
+
+- **README documents the unified-memory reservation model.**
+  `gpu_memory_utilization` is a reservation, not a ceiling: peak RAM tracks it
+  linearly (`~20.5GB + gmem x 111.51GB`, measured on a 128GB GB10). Lowering a
+  model's KV estimate does not lower its footprint — it only changes which gmem
+  the launcher picks.
+- **`--use-wheels` and `MODELS=` are documented** in the README command table and
+  CLAUDE.md, including their tradeoffs.
+
+### Fixed
+
+- **`vllm/VLLM_NODE_PROVENANCE.md` records what the images actually contain.** It
+  described a 2026-06-11 source build that no longer ships, and claimed the two
+  images shared a vLLM ref. They had diverged by four vLLM minor versions and a
+  PyTorch major, since only `base` was rebuilt. Each image now has its own ref
+  table and the drift is stated up front. `DEFAULT_VLLM_REF` follows the image
+  that runs.
+
 ## [1.5.0] - 2026-08-23
 
 Three bugs surfaced while bringing a new hybrid-attention model up on a DGX Spark

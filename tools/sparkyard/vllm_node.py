@@ -29,6 +29,14 @@ def build_plan(cfg, variants, ref, clone_exists):
     steps = []
     if clone_exists:
         steps.append(Step("fetch upstream", cfg.clone_path, ["git", "fetch"]))
+        # Advance the clone to the fetched tip. Without this the fetch is inert and
+        # the build runs from whatever HEAD was cloned, however old: a clone 101
+        # commits behind missed "Fix flashinfer build issues" and the build failed
+        # on an unsatisfiable flashinfer/nvidia-cutlass-dsl resolve. --ff-only keeps
+        # it fail-closed — a diverged or dirty clone stops the build instead of
+        # silently building something else.
+        steps.append(Step("update tooling clone", cfg.clone_path,
+                          ["git", "merge", "--ff-only", "@{u}"]))
     else:
         steps.append(Step("clone upstream", None,
                           ["git", "clone", cfg.upstream, cfg.clone_path]))

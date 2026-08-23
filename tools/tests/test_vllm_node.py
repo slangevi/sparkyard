@@ -105,7 +105,7 @@ def test_exec_runs_steps_in_order_until_failure():
                        which=lambda t: "/usr/bin/" + t,
                        exec_step=exec_step)
     assert rc == 1
-    assert seen == ["fetch upstream", "build base"]  # stops at the failing step
+    assert seen == ["fetch upstream", "update tooling clone", "build base"]  # stops at the failing step
 
 
 def test_clone_existence_checks_dot_git():
@@ -125,3 +125,36 @@ def test_variant_arg_selects_single_variant():
                   exec_step=lambda step: seen.append(step.description) or 0)
     assert "build mxfp4" in seen
     assert "build base" not in seen
+
+
+# --- the tooling clone must actually advance after fetching ------------------
+# `git fetch` alone leaves the clone at its old HEAD, so the build uses whatever
+# spark-vllm-docker was cloned months ago. Observed in the field: a clone 101
+# commits behind lacked "Fix flashinfer build issues", and the build died at
+# `uv pip install` on an unsatisfiable flashinfer/nvidia-cutlass-dsl conflict.
+
+def test_build_plan_advances_tooling_clone_after_fetch():
+    plan = vllm_node.build_plan(CFG, ["base"], "7852e50e4", clone_exists=True)
+    argvs = _argvs(plan)
+    ff = [a for a in argvs if a[:2] == ["git", "merge"]]
+    assert ff, f"no fast-forward step in plan: {argvs}"
+    assert "--ff-only" in ff[0], "clone must advance by fast-forward only"
+    # and it must happen after the fetch, before any build
+    i_fetch = argvs.index(["git", "fetch"])
+    i_ff = argvs.index(ff[0])
+    i_build = next(i for i, a in enumerate(argvs) if a[0] == "./build-and-copy.sh")
+    assert i_fetch < i_ff < i_build
+
+
+def test_fresh_clone_needs_no_fast_forward():
+    # A just-cloned repo is already at the default branch tip.
+    argvs = _argvs(vllm_node.build_plan(CFG, ["base"], "7852e50e4", clone_exists=False))
+    assert not any(a[:2] == ["git", "merge"] for a in argvs)
+
+
+def test_advancing_the_clone_is_not_a_vllm_ref_checkout():
+    # Guard the PR #11 regression: advancing the tooling clone must not reintroduce
+    # `git checkout <vllm ref>`, which aborts on a fresh clone.
+    argvs = _argvs(vllm_node.build_plan(CFG, ["base"], "abc1234", clone_exists=True))
+    assert not any(a[:2] == ["git", "checkout"] for a in argvs)
+    assert not any("abc1234" in a for a in argvs if a[0] == "git")

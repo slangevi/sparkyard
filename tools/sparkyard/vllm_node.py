@@ -22,10 +22,12 @@ _REF_VARIANTS = {
 }
 
 
-def build_plan(cfg, variants, ref, clone_exists):
+def build_plan(cfg, variants, ref, clone_exists, use_wheels=False):
     """Return the ordered Steps to build `variants`. Pure: no git/docker/fs calls.
 
-    cfg: VllmBuild (upstream, clone_path, vllm_ref). clone_exists: bool."""
+    cfg: VllmBuild (upstream, clone_path, vllm_ref). clone_exists: bool.
+    use_wheels: build only the runner from prebuilt, pre-resolved wheels
+    (minutes instead of ~30; never falls back to compiling)."""
     steps = []
     if clone_exists:
         steps.append(Step("fetch upstream", cfg.clone_path, ["git", "fetch"]))
@@ -50,6 +52,8 @@ def build_plan(cfg, variants, ref, clone_exists):
             argv = ["./build-and-copy.sh", "--exp-mxfp4"]
         else:
             argv = ["./build-and-copy.sh", *_REF_VARIANTS[v], "--vllm-ref", ref]
+        if use_wheels:
+            argv.append("--use-wheels")
         steps.append(Step(f"build {v}", cfg.clone_path, argv))
     return steps
 
@@ -70,7 +74,8 @@ def run(args, settings, exists=os.path.exists, which=shutil.which, exec_step=Non
     variants = [args.variant] if args.variant else list(DEFAULT_VARIANTS)
     ref = args.vllm_ref or cfg.vllm_ref
     clone_exists = exists(os.path.join(cfg.clone_path, ".git"))
-    plan = build_plan(cfg, variants, ref, clone_exists)
+    plan = build_plan(cfg, variants, ref, clone_exists,
+                      use_wheels=getattr(args, "use_wheels", False))
 
     if args.dry_run:
         print(f"# plan: variants={variants} ref={ref} clone={cfg.clone_path}")
@@ -84,7 +89,9 @@ def run(args, settings, exists=os.path.exists, which=shutil.which, exec_step=Non
             print(f"✗ '{tool}' not found on PATH — install it and retry.", file=sys.stderr)
             return 1
 
-    print(f"… building vLLM image(s) {', '.join(variants)} at ref {ref} — this can take ~30 min.")
+    how = "from prebuilt wheels" if getattr(args, "use_wheels", False) else f"at ref {ref}"
+    eta = "~10 min" if getattr(args, "use_wheels", False) else "~30 min"
+    print(f"… building vLLM image(s) {', '.join(variants)} {how} — this can take {eta}.")
     for step in plan:
         rc = exec_step(step)
         if rc != 0:

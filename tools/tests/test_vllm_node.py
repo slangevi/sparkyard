@@ -158,3 +158,29 @@ def test_advancing_the_clone_is_not_a_vllm_ref_checkout():
     argvs = _argvs(vllm_node.build_plan(CFG, ["base"], "abc1234", clone_exists=True))
     assert not any(a[:2] == ["git", "checkout"] for a in argvs)
     assert not any("abc1234" in a for a in argvs if a[0] == "git")
+
+
+# --- --use-wheels: build the runner from prebuilt, pre-resolved wheels -------
+# Source builds take ~30 min and can fail on dependency conflicts that the
+# published wheel set has already resolved. --use-wheels built in 11:15 and
+# installed the same flashinfer 0.6.18 that the source path could not satisfy.
+
+def test_use_wheels_threads_into_build():
+    plan = vllm_node.build_plan(CFG, ["base"], "7852e50e4", clone_exists=True,
+                                use_wheels=True)
+    build = [a for a in _argvs(plan) if a[0] == "./build-and-copy.sh"][0]
+    assert "--use-wheels" in build
+
+
+def test_use_wheels_defaults_off():
+    plan = vllm_node.build_plan(CFG, ["base"], "7852e50e4", clone_exists=True)
+    build = [a for a in _argvs(plan) if a[0] == "./build-and-copy.sh"][0]
+    assert "--use-wheels" not in build
+
+
+def test_use_wheels_applies_to_every_variant():
+    plan = vllm_node.build_plan(CFG, ["base", "tf5"], "7852e50e4", clone_exists=True,
+                                use_wheels=True)
+    builds = [a for a in _argvs(plan) if a[0] == "./build-and-copy.sh"]
+    assert len(builds) == 2
+    assert all("--use-wheels" in b for b in builds)

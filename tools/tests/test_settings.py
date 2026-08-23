@@ -1,5 +1,5 @@
 import os
-from sparkyard.settings import Settings
+from sparkyard.settings import Settings, DEFAULT_VLLM_REF
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -35,7 +35,7 @@ def test_vllm_defaults_apply_when_block_absent():
     s = Settings.load(os.path.join(FIXTURES, "settings.local.yaml"))
     assert s.vllm.upstream == "https://github.com/eugr/spark-vllm-docker"
     assert s.vllm.clone_path == "/repo/vllm/build/spark-vllm-docker"  # {repo_path} resolved
-    assert s.vllm.vllm_ref == "7852e50e4"
+    assert s.vllm.vllm_ref == DEFAULT_VLLM_REF
 
 
 def test_vllm_block_overrides_and_resolves_clone_path():
@@ -69,4 +69,4 @@ def test_vllm_partial_block_fills_remaining_defaults():
     s = Settings.load(path)
     assert s.vllm.upstream == "https://example.com/fork.git"   # overridden
     assert s.vllm.clone_path == "/repo/vllm/build/spark-vllm-docker"  # default, {repo_path} resolved
-    assert s.vllm.vllm_ref == "7852e50e4"                      # default
+    assert s.vllm.vllm_ref == DEFAULT_VLLM_REF                 # default

@@ -728,3 +728,49 @@ def test_vllmnode_check_never_builds_even_with_use_wheels(tmp_path):
                     use_wheels=True, deps=deps,
                     build_vllm=lambda ref, use_wheels=False: builds.append(1) or 0)
     assert rc == 0 and builds == []
+
+
+# --- a failed digest resolution must say WHY -------------------------------
+# plan_image_updates caught the resolver exception and reported the bare string
+# "error". The exception already carried the registry's message; discarding it
+# turned a ten-second diagnosis into a two-release mystery. Real case: an expired
+# ghcr.io PAT in ~/.docker/config.json made buildx offer a credential where none
+# was needed, ghcr answered 403, and two components silently sat on stale pins.
+
+def test_resolver_failure_records_the_reason():
+    pins = update.parse_image_pins(
+        "services:\n  x:\n    image: ghcr.io/o/r:main@sha256:" + "a" * 64 + "\n")
+    def boom(_rt):
+        raise update.UpdateError("imagetools inspect failed for ghcr.io/o/r:main: "
+                                 "failed to fetch oauth token: 403 Forbidden")
+    res = update.plan_image_updates(pins, boom)
+    assert res[0].status == "error"
+    assert res[0].reason, "the resolver message must be preserved"
+    assert "403" in res[0].reason
+
+
+def test_malformed_resolver_result_also_records_a_reason():
+    pins = update.parse_image_pins(
+        "services:\n  x:\n    image: ghcr.io/o/r:main@sha256:" + "b" * 64 + "\n")
+    res = update.plan_image_updates(pins, lambda _rt: "not-a-digest")
+    assert res[0].status == "error"
+    assert res[0].reason and "not-a-digest" in res[0].reason
+
+
+def test_successful_resolution_has_no_reason():
+    pins = update.parse_image_pins(
+        "services:\n  x:\n    image: r/i:t@sha256:" + "c" * 64 + "\n")
+    res = update.plan_image_updates(pins, lambda _rt: "sha256:" + "d" * 64)
+    assert res[0].status == "newer" and not res[0].reason
+
+
+def test_report_prints_the_error_reason(capsys):
+    pins = update.parse_image_pins(
+        "services:\n  webui:\n    image: ghcr.io/o/r:main@sha256:" + "e" * 64 + "\n")
+    def boom(_rt):
+        raise update.UpdateError("failed to fetch oauth token: 403 Forbidden")
+    res = update.plan_image_updates(pins, boom)
+    out = update.format_report(res, None, None, None)
+    text = out if isinstance(out, str) else "\n".join(out)
+    assert "error" in text
+    assert "403" in text, f"the reason must reach the report:\n{text}"

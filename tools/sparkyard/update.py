@@ -26,7 +26,8 @@ class UpdateError(Exception):
 # ("repo[:tag]@sha256:digest"); digest is "sha256:...".
 ImagePin = namedtuple("ImagePin", "service ref repo tag digest")
 # status: "up-to-date" | "newer" | "error" | "no-tag"
-ImageResult = namedtuple("ImageResult", "pin new_digest status")
+ImageResult = namedtuple("ImageResult", "pin new_digest status reason",
+                         defaults=(None,))   # reason: why status == "error"
 
 
 def _split_repo_tag(name_part):
@@ -55,9 +56,19 @@ def parse_image_pins(compose_text):
     return pins
 
 
+def _short_reason(exc, limit=110):
+    """One-line, length-capped rendering of a resolver failure for the table."""
+    msg = " ".join(str(exc).split())
+    return msg[:limit - 1] + "…" if len(msg) > limit else msg
+
+
 def plan_image_updates(pins, resolve_digest):
     """For each pin, resolve repo:tag -> current digest and classify. Fail-soft:
-    a resolver exception marks that image 'error'; a tagless pin is 'no-tag'."""
+    a resolver exception marks that image 'error'; a tagless pin is 'no-tag'.
+
+    An 'error' carries the resolver's message in .reason. Swallowing it hid a
+    dead ghcr.io credential (403 on a token that was not even required) behind a
+    bare "error" for two releases."""
     results = []
     for pin in pins:
         if pin.tag is None:
@@ -65,12 +76,13 @@ def plan_image_updates(pins, resolve_digest):
             continue
         try:
             latest = resolve_digest(f"{pin.repo}:{pin.tag}")
-        except Exception:
-            results.append(ImageResult(pin, None, "error"))
+        except Exception as e:
+            results.append(ImageResult(pin, None, "error", _short_reason(e)))
             continue
         if not isinstance(latest, str) or not latest.startswith("sha256:"):
             # a malformed resolver result must not slip through as 'newer'
-            results.append(ImageResult(pin, None, "error"))
+            results.append(ImageResult(pin, None, "error",
+                                       f"malformed digest {latest!r}"))
             continue
         status = "up-to-date" if latest == pin.digest else "newer"
         results.append(ImageResult(pin, latest if status == "newer" else None, status))
@@ -249,6 +261,10 @@ def format_report(image_results, ls_plan, llamacpp_note, vllm_note):
             else:  # error | no-tag
                 cur, latest, st = _short(r.pin.digest), "-", r.status
             lines.append(f"{r.pin.service:<16} {cur:<11} {latest:<11} {st}")
+            if r.status == "error" and r.reason:
+                # Without this the table said only "error", which is what let a
+                # dead ghcr.io credential hide behind two releases of stale pins.
+                lines.append(f"{'':<16} └─ {r.reason}")
         if ls_plan:
             ls_latest = f"v{ls_plan['latest']}" if ls_plan.get("latest") is not None else "-"
             lines.append(f"{'llama-swap':<16} {'v' + str(ls_plan.get('current', '?')):<11} "

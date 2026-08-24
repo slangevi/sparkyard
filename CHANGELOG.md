@@ -9,6 +9,30 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Added
+
+- **`sparkyard reload`** — re-render, then restart the services that read the
+  generated config, waiting for *all* of them to report healthy. `start` is
+  `docker compose up -d`, which cannot see a bind-mounted config file change, so
+  a render was never live until llama-swap and litellm were restarted by hand —
+  and waiting on llama-swap alone races LiteLLM into "connection reset by peer".
+- **`sparkyard models`** — list what is configured: engine, context, gmem range,
+  whether weights are on disk, and the aliases callers actually address.
+  `--json`, `--on-disk`, `--engine`. Previously this required reading
+  `models.yaml` by hand; `doctor` only reported it as a side effect.
+- **`sparkyard explain <model>`** — dry-run a model's launcher and print the
+  gmem plan (`attn_layers`, weights, KV, resolved `gpu_memory_utilization`)
+  without loading anything. `--argv` adds the docker command. Fail-closed on an
+  unknown name, and explicit that llamacpp entries have no launcher to dry-run.
+- **`sparkyard bench --model`** (repeatable) replaces reaching for the `MODELS=`
+  environment variable, which was the odd one out among the flags.
+
+### Changed
+
+- **`sparkyard update` no longer implies its pins are live.** It bumps pins and
+  pulls/builds but never recreates containers, so the stack keeps running the old
+  images; the success message now says so and points at `sparkyard reload`.
+
 ## [1.7.1] - 2026-08-24
 
 Maintenance: every component pin brought current, and two fixes that came out of

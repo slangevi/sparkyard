@@ -131,7 +131,7 @@ services:
   # The 15-second startup delay gives the GPU driver time to settle
   # before Ollama tries to claim VRAM — avoids init-time OOM on GB10.
   ollama:
-    image: ollama/ollama:latest@sha256:05b6fe5143ed006d6d4abd39bdd575f962a5822bdf81e6fbb5e6894eb984ab9c
+    image: ollama/ollama:latest@sha256:57d60e686821ea81a7748a3ec8141308c8b8f95b27105713954abf7a6529e700
     container_name: ollama
     restart: unless-stopped
     ipc: host
@@ -205,7 +205,7 @@ services:
   # Stores LiteLLM's virtual keys, usage logs, and team/budget data.
   # Exposed on 15432 to avoid conflict with any host Postgres on 5432.
   litellm-db:
-    image: postgres:15-alpine@sha256:df7bca0066e6f60cc3dd32faa70caddec20e2c22b58932f79498e5704b23854a
+    image: postgres:15-alpine@sha256:fe0737ba566a2c5b2a28f34433c0a423261900ec17b9bf7ad115e1aae7e57f1b
     container_name: litellm-postgres
     restart: unless-stopped
     healthcheck:

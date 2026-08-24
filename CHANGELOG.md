@@ -9,6 +9,13 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-24
+
+Ergonomics, all of it earned the hard way: each command here replaces a
+workaround that was typed by hand repeatedly during one GB10 bring-up. The
+running theme is the same one the previous two releases kept hitting — steps
+that reported success without having done the thing.
+
 ### Added
 
 - **`sparkyard reload`** — re-render, then restart the services that read the
@@ -357,6 +364,7 @@ NVIDIA DGX Spark (GB10).
   engines bind `127.0.0.1` and Postgres has no host port. Service healthchecks +
   `service_healthy` startup ordering.
 
+[1.8.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.8.0
 [1.7.1]: https://github.com/slangevi/sparkyard/releases/tag/v1.7.1
 [1.7.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.7.0
 [1.6.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.6.0

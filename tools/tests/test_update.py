@@ -586,7 +586,7 @@ def test_vllmnode_explicit_apply_syncs_four_refs_on_success(tmp_path):
     read_text, listdir = _clone_readers()
     builds = []
     rc = update.run(str(tmp_path), _settings(), check=False, components=["vllm-node"],
-                    deps=deps, build_vllm=lambda ref: builds.append(ref) or 0,
+                    deps=deps, build_vllm=lambda ref, uw=False: builds.append(ref) or 0,
                     read_text=read_text, listdir=listdir)
     assert rc == 0 and builds == ["newsha111" + "0" * 31]
     assert "vllm_ref: newsha111" in (tmp_path / "settings.local.yaml").read_text()
@@ -605,7 +605,7 @@ def test_vllmnode_apply_no_writes_on_build_failure(tmp_path):
     deps = _fake_deps(resolved, latest_tag="v224", head="newsha111" + "0" * 31, behind=9)
     read_text, listdir = _clone_readers()
     rc = update.run(str(tmp_path), _settings(), check=False, components=["vllm-node"],
-                    deps=deps, build_vllm=lambda ref: 1,  # build FAILS
+                    deps=deps, build_vllm=lambda ref, uw=False: 1,  # build FAILS
                     read_text=read_text, listdir=listdir)
     assert rc != 0
     assert "7852e50e4" in (tmp_path / "settings.local.yaml").read_text() or \
@@ -641,7 +641,90 @@ def test_vllmnode_allmode_reports_but_does_not_build(tmp_path):
     deps = _fake_deps(resolved, latest_tag="v224", head="newsha111" + "0" * 31, behind=9)
     builds = []
     rc = update.run(str(tmp_path), _settings(), check=False, deps=deps,
-                    build_vllm=lambda ref: builds.append(ref) or 0)
+                    build_vllm=lambda ref, uw=False: builds.append(ref) or 0)
     assert rc == 0 and builds == []  # report-only in all-mode
     assert 'DEFAULT_VLLM_REF = "7852e50e4"' in (
         tmp_path / "tools" / "sparkyard" / "settings.py").read_text()
+
+
+# --- update vllm-node --use-wheels -------------------------------------------
+# Wheels install whatever version the published set carries, so the build cannot
+# honour "build at HEAD". The pin must therefore come from the BUILT artifacts,
+# not from the resolved head, or settings.py would claim a commit the image does
+# not contain.
+
+def _clone_readers_wheelbuilt():
+    """Clone artifacts recording a build that landed on wheelsha, not on head."""
+    files = {"/clone/wheels/.vllm-commit": "wheelsha222\n",
+             "/clone/wheels/.flashinfer-commit": "ff0618\n"}
+    entries = {"/clone/wheels": [
+        "vllm-0.26.1rc1.dev1105+gwheelsha222.d20260822-cp312-cp312-linux_aarch64.whl"]}
+    return (lambda p: files[p]), (lambda p: entries[p])
+
+
+def _resolved4():
+    return {"ollama/ollama:latest": "sha256:" + "0" * 8,
+            "docker.litellm.ai/berriai/litellm-database:main-stable": "sha256:bbbb",
+            "postgres:15-alpine": "sha256:cccc",
+            "ghcr.io/open-webui/open-webui:main": "sha256:dddd"}
+
+
+def test_vllmnode_use_wheels_threads_to_the_builder(tmp_path):
+    _write_repo(tmp_path)
+    deps = _fake_deps(_resolved4(), latest_tag="v224", head="newsha111" + "0" * 31, behind=9)
+    rt, ls = _clone_readers_wheelbuilt()
+    seen = []
+    rc = update.run(str(tmp_path), _settings(), check=False, components=["vllm-node"],
+                    use_wheels=True, deps=deps,
+                    build_vllm=lambda ref, use_wheels=False: seen.append(use_wheels) or 0,
+                    read_text=rt, listdir=ls)
+    assert rc == 0 and seen == [True]
+
+
+def test_vllmnode_use_wheels_pins_the_built_ref_not_head(tmp_path):
+    _write_repo(tmp_path)
+    deps = _fake_deps(_resolved4(), latest_tag="v224", head="newsha111" + "0" * 31, behind=9)
+    rt, ls = _clone_readers_wheelbuilt()
+    rc = update.run(str(tmp_path), _settings(), check=False, components=["vllm-node"],
+                    use_wheels=True, deps=deps,
+                    build_vllm=lambda ref, use_wheels=False: 0, read_text=rt, listdir=ls)
+    assert rc == 0
+    sp = (tmp_path / "tools" / "sparkyard" / "settings.py").read_text()
+    sl = (tmp_path / "settings.local.yaml").read_text()
+    assert "wheelsha222" in sp and "newsha111" not in sp, sp
+    assert "wheelsha222" in sl and "newsha111" not in sl, sl
+
+
+def test_vllmnode_source_build_still_pins_head(tmp_path):
+    # Regression guard: the source path must keep pinning the requested ref.
+    _write_repo(tmp_path)
+    deps = _fake_deps(_resolved4(), latest_tag="v224", head="newsha111" + "0" * 31, behind=9)
+    rt, ls = _clone_readers()
+    rc = update.run(str(tmp_path), _settings(), check=False, components=["vllm-node"],
+                    deps=deps, build_vllm=lambda ref, use_wheels=False: 0,
+                    read_text=rt, listdir=ls)
+    assert rc == 0
+    assert 'DEFAULT_VLLM_REF = "newsha111' in (
+        tmp_path / "tools" / "sparkyard" / "settings.py").read_text()
+
+
+def test_vllmnode_use_wheels_message_does_not_promise_head(tmp_path, capsys):
+    _write_repo(tmp_path)
+    deps = _fake_deps(_resolved4(), latest_tag="v224", head="newsha111" + "0" * 31, behind=9)
+    rt, ls = _clone_readers_wheelbuilt()
+    update.run(str(tmp_path), _settings(), check=False, components=["vllm-node"],
+               use_wheels=True, deps=deps,
+               build_vllm=lambda ref, use_wheels=False: 0, read_text=rt, listdir=ls)
+    out = capsys.readouterr().out
+    assert "wheel" in out.lower(), out
+    assert "~30 min" not in out, out
+
+
+def test_vllmnode_check_never_builds_even_with_use_wheels(tmp_path):
+    _write_repo(tmp_path)
+    deps = _fake_deps(_resolved4(), latest_tag="v224", head="newsha111" + "0" * 31, behind=9)
+    builds = []
+    rc = update.run(str(tmp_path), _settings(), check=True, components=["vllm-node"],
+                    use_wheels=True, deps=deps,
+                    build_vllm=lambda ref, use_wheels=False: builds.append(1) or 0)
+    assert rc == 0 and builds == []

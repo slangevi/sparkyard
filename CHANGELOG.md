@@ -20,6 +20,13 @@ the prior work that inspired it.
   `gmem.max` caps what vLLM may reserve and vLLM reserves the whole fraction, so
   weights that do not fit inside it cannot load — cheap to catch on disk rather
   than ten minutes into a cold start.
+- **`sparkyard update vllm-node --use-wheels`.** Rebuilds from the published
+  wheel set (~10 min) instead of compiling at upstream HEAD (~30 min). Because
+  wheels install whatever version they carry rather than a requested ref, the
+  build cannot land on HEAD — so the message says so, and the pin is taken from
+  the *built* artifacts rather than the resolved head. Without that, the three
+  synced ref locations would record a commit the image does not contain. The
+  `--check` gate and the explicit-naming gate are unchanged.
 
 ### Changed
 

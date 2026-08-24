@@ -69,9 +69,10 @@ sparkyard render      # regenerate the live configs
 sparkyard build       # build the local llama-cpp + llama-swap images
 sparkyard start       # docker compose up -d   (sparkyard stop = down)
 sparkyard update [components...] --check [--notes]   # preview updates (--notes: gateway summary); name components to scope (default: all)
+sparkyard update vllm-node --use-wheels              # rebuild from prebuilt wheels (~10 min, not ~30); pins the BUILT ref
 sparkyard doctor      # advisory on-disk model report
 sparkyard download / add-model / vllm-node / bench / validate
-sparkyard vllm-node --use-wheels     # runner from prebuilt wheels (~10 min, not ~30)
+sparkyard vllm-node --use-wheels     # same build, standalone (writes no pins)
 MODELS="name" sparkyard bench        # scope the sweep; unscoped loads every model
 make venv / test / lint    # bootstrap + dev (make-only)
 ```

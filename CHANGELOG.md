@@ -9,6 +9,17 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The README's peak-memory formula is labelled as a steady-state estimate.** It
+  was fitted on one 27B model varying only `gmem`, and presented as general
+  guidance. A second model contradicts it: 34.9GiB of weights at `gmem 0.40`
+  settled at 58.7GB (close to the predicted 65GB) but peaked at **95GB during
+  load** — ~36GB above its own steady state, where the 21.8GiB model showed
+  almost no spike. The load transient is what actually crashes a unified-memory
+  box, so the section now separates resident footprint from load peak and says
+  the transient has not been isolated.
+
 ## [1.6.0] - 2026-08-24
 
 Fallout from a GB10 bring-up that cost two machine crashes. The through-line is

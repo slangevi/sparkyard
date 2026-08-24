@@ -105,7 +105,7 @@ def _dispatch(args):
         return getattr(ops, args.cmd)(root)
 
     try:
-        settings, models = load(args.models, args.settings)
+        settings, models, groups = load(args.models, args.settings)
     except RenderError as e:
         print(f"✗ {e}", file=sys.stderr)
         return 1
@@ -146,9 +146,7 @@ def _dispatch(args):
 
     if args.cmd == "models":
         from . import models_cmd
-        from .render import load as _load_ssot
-        settings, models_ = _load_ssot(args.models, args.settings)
-        print(models_cmd.render(models_, settings, on_disk=args.on_disk,
+        print(models_cmd.render(models, settings, on_disk=args.on_disk,
                                 engine=args.engine, as_json=args.as_json))
         return 0
 
@@ -160,7 +158,8 @@ def _dispatch(args):
         return 0
 
     if args.cmd == "render":
-        render_all(settings, models, args.llama_swap_out, args.litellm_out, args.env_out)
+        render_all(settings, models, args.llama_swap_out, args.litellm_out,
+                   args.env_out, groups)
         print(f"✓ rendered {len(models)} models -> "
               f"{args.llama_swap_out}, {args.litellm_out}, {args.env_out}")
         return 0

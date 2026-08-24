@@ -25,7 +25,45 @@ def _is_yaml_special(s):
         return True
 
 
-def validate(models):
+GROUP_FLAGS = ("swap", "exclusive", "persistent")
+
+
+def _validate_groups(groups, model_names):
+    """Check a llama-swap `groups` mapping against the model list. llama-swap
+    silently ignores a group whose member is not a model ID, which presents as
+    "my model never stays loaded" — so membership is checked fail-closed here."""
+    errors = []
+    if not isinstance(groups, dict):
+        errors.append(f"groups must be a mapping (got {type(groups).__name__})")
+        return errors
+    owner = {}
+    for gname, g in groups.items():
+        if not isinstance(gname, str) or not NAME_RE.match(gname):
+            errors.append(f"group name {gname!r} must be a string matching [A-Za-z0-9._-]+")
+            continue
+        if not isinstance(g, dict):
+            errors.append(f"group '{gname}': must be a mapping (got {type(g).__name__})")
+            continue
+        for flag in GROUP_FLAGS:
+            if flag in g and not isinstance(g[flag], bool):
+                errors.append(f"group '{gname}': {flag} must be true or false (got {g[flag]!r})")
+        members = g.get("members")
+        if not isinstance(members, list) or not members:
+            errors.append(f"group '{gname}': members must be a non-empty list of model names")
+            continue
+        for mem in members:
+            if mem not in model_names:
+                errors.append(f"group '{gname}': member '{mem}' is not a model name in "
+                              f"models.yaml (groups key off model names, not aliases)")
+            elif mem in owner:
+                errors.append(f"{mem}: appears in more than one group "
+                              f"('{owner[mem]}' and '{gname}') — llama-swap allows only one")
+            else:
+                owner[mem] = gname
+    return errors
+
+
+def validate(models, groups=None):
     errors = []
     seen = {}
     for m in models:
@@ -122,5 +160,8 @@ def validate(models):
             val = m.raw.get(fld)
             if isinstance(val, str) and "'" in val:
                 errors.append(f"{m.name}: {fld} contains a single quote, which breaks shell quoting")
+
+    if groups:
+        errors.extend(_validate_groups(groups, {m.name for m in models}))
 
     return errors

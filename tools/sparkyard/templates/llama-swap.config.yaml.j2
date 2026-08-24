@@ -2,8 +2,9 @@
 host: "0.0.0.0"
 port: 8080
 timeout: 3600
-readyTimeout: 3600
-healthCheckTimeout: 900
+# healthCheckTimeout is llama-swap's only ready-wait control; sized to the
+# slowest model's ready_timeout in models.yaml.
+healthCheckTimeout: {{ health_check_timeout }}
 logLevel: "info"
 metricsMaxInMemory: 1000
 
@@ -15,7 +16,6 @@ models:
 {% for m in models %}
   {{ m.name }}:
     ttl: {{ m.ttl }}
-    readyTimeout: {{ m.ready_timeout }}
     checkEndpoint: "{{ m.check_endpoint }}"
 {%- if m.engine == "vllm" %}
     cmd: >
@@ -70,3 +70,25 @@ models:
     cmdStop: "docker stop {{ m.container }}-${PORT}"
 {%- endif %}
 {% endfor %}
+{%- if groups %}
+
+# routing: which models may stay loaded together. Absent `groups` in models.yaml
+# leaves llama-swap's default behaviour (one model at a time) untouched.
+routing:
+  router:
+    use: group
+    settings:
+      groups:
+{%- for gname, g in groups.items() %}
+        "{{ gname }}":
+{%- for flag in ["swap", "exclusive", "persistent"] %}
+{%- if flag in g %}
+          {{ flag }}: {{ g[flag] | tojson }}
+{%- endif %}
+{%- endfor %}
+          members:
+{%- for mem in g["members"] %}
+            - "{{ mem }}"
+{%- endfor %}
+{%- endfor %}
+{%- endif %}

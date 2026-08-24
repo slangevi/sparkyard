@@ -29,7 +29,9 @@ def _env():
 
 
 def load(models_path, settings_path):
-    """Return (settings, models) with placeholders resolved; raises RenderError on any problem."""
+    """Return (settings, models, groups) with placeholders resolved; raises
+    RenderError on any problem. `groups` is the optional llama-swap routing
+    group map from models.yaml ({} when the key is absent)."""
     try:
         settings = Settings.load(settings_path)
     except FileNotFoundError:
@@ -48,18 +50,36 @@ def load(models_path, settings_path):
         models = load_models(raw)
     except KeyError as e:
         raise RenderError(f"models.yaml problem (missing key or unknown placeholder): {e}")
-    errors = validate(models)
+    groups = raw.get("groups") or {}
+    errors = validate(models, groups)
     if errors:
         raise RenderError("invalid models.yaml:\n  - " + "\n  - ".join(errors))
-    return settings, models
+    return settings, models, groups
 
 
-def render_llama_swap(models):
-    return _env().get_template("llama-swap.config.yaml.j2").render(models=models)
+# llama-swap's global healthCheckTimeout is the ONLY ready-wait control it has
+# (v251 has no `readyTimeout` key at either level), so it must cover the slowest
+# cold load in the set or that model can never start: llama-swap kills it with
+# "health check timed out" and the operator sees a model that simply never loads.
+HEALTH_CHECK_FLOOR = 120        # llama-swap's own default
+REQUEST_TIMEOUT_HEADROOM = 300  # load time + room to actually generate
+
+
+def ready_ceiling(models):
+    """The slowest cold load across the model set, in seconds."""
+    return max([m.ready_timeout for m in models], default=HEALTH_CHECK_FLOOR)
+
+
+def render_llama_swap(models, groups=None):
+    return _env().get_template("llama-swap.config.yaml.j2").render(
+        models=models, groups=groups or {},
+        health_check_timeout=max(ready_ceiling(models), HEALTH_CHECK_FLOOR))
 
 
 def render_litellm(models):
-    return _env().get_template("litellm.config.yaml.j2").render(models=models)
+    return _env().get_template("litellm.config.yaml.j2").render(
+        models=models,
+        request_timeout=ready_ceiling(models) + REQUEST_TIMEOUT_HEADROOM)
 
 
 def render_compose_env(settings):
@@ -79,8 +99,8 @@ def atomic_write(path, content):
             os.remove(tmp)
 
 
-def render_all(settings, models, ls_out, ll_out, env_out):
+def render_all(settings, models, ls_out, ll_out, env_out, groups=None):
     """Render + atomically write all three live config files from loaded objects."""
-    atomic_write(ls_out, render_llama_swap(models))
+    atomic_write(ls_out, render_llama_swap(models, groups))
     atomic_write(ll_out, render_litellm(models))
     atomic_write(env_out, render_compose_env(settings))

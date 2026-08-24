@@ -36,6 +36,20 @@ defaults:
 # set during load (measured 86GB peak vs 54GB without on a 21.8GB model).
 # See the README's "GB10 / unified-memory gotchas" section; `sparkyard doctor`
 # flags both.
+# groups (optional): which models may stay loaded at the same time. Omit this
+# key and llama-swap keeps its default behaviour — one model at a time. Use it
+# when a small always-on model (embeddings, a draft model) must survive a large
+# model loading. Members are model names from `models:` below, never aliases,
+# and a model may belong to at most one group.
+#
+# groups:
+#   resident:
+#     swap: false        # members run together instead of swapping each other out
+#     exclusive: false   # loading a member does not unload other groups
+#     persistent: true   # other groups can never unload this one
+#     members:
+#       - My-Embedding-Model
+
 models:
   # ---- vLLM (safetensors) ----
   - name: Qwen2.5-3B-Instruct

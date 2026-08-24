@@ -9,6 +9,44 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Added
+
+- **`groups:` in `models.yaml`** — an optional top-level key, mirroring
+  llama-swap's `routing.router.settings.groups` one-for-one, that says which
+  models may stay loaded together. Without it llama-swap swaps one model at a
+  time, which makes an always-on model impossible: every embedding call from
+  Open WebUI's RAG would evict the loaded generation model and pay a full
+  reload. Membership is validated fail-closed against model names (llama-swap
+  silently ignores a group naming an unknown member, which presents as "my
+  model never stays loaded"), aliases are rejected, and a model may belong to at
+  most one group. Absent the key the rendered config is unchanged.
+
+### Fixed
+
+- **Launcher KV sizing for `layers_block_type` models.** `launch.py` understood
+  the hybrid layouts spelled as `layer_types`, `full_attention_interval`, and
+  `hybrid_override_pattern`, but not the per-block list form
+  (`layers_block_type: [mamba, moe, attention, ...]`) that Nemotron-3.5 and
+  Nemotron-3-Puzzle ship. Every block counted as an attention layer, sizing the
+  KV cache ~8x too large (Lightning-30B: 26 GiB estimated vs ~3 GiB actual) and
+  inflating `--gpu-memory-utilization` accordingly.
+- **A model slower than 900 s to load could never start.** llama-swap v251 has
+  exactly one ready-wait control — the *global* `healthCheckTimeout` — and no
+  `readyTimeout` key at either level, so the per-model `ready_timeout:` in
+  `models.yaml` was rendered into a key llama-swap ignores and every model was
+  really gated by a hardcoded global 900. A 50 GB NVFP4 model with
+  `ready_timeout: 1800` died mid-load with
+  `health check timed out after 15m0s`, which reads as a broken model rather
+  than a too-short timeout. `healthCheckTimeout` is now derived from the slowest
+  model in the set, the dead `readyTimeout` keys are gone, and LiteLLM's
+  `request_timeout` is derived from the same figure plus headroom so the gateway
+  cannot give up while a model is still loading.
+- **`nemotron_h_puzzle` configs could not launch at all.** Puzzle (NAS-derived)
+  configs carry no `num_hidden_layers` — the block list is the only layer count
+  present — so `parse_config` bailed out with
+  `FATAL: could not parse layers/heads/head_dim`. The layer count is now derived
+  from `layers_block_type` when the scalar is absent.
+
 ## [1.8.0] - 2026-08-24
 
 Ergonomics, all of it earned the hard way: each command here replaces a

@@ -112,3 +112,17 @@ def test_update_forwards_positional_components(monkeypatch, tmp_path):
     assert cli.main(["update", "litellm", "open-webui", "--check"]) == 0
     assert captured["components"] == ("litellm", "open-webui")
     assert captured["check"] is True
+
+
+def test_models_command_runs_end_to_end(capsys):
+    # Regression: the `models` branch re-loaded the SSOT on its own, so a change
+    # to render.load()'s return shape broke `sparkyard models` while every
+    # unit test around models_cmd kept passing.
+    import os
+    fixtures = os.path.join(os.path.dirname(__file__), "fixtures")
+    rc = cli.main(["--models", os.path.join(fixtures, "models.yaml"),
+                   "--settings", os.path.join(fixtures, "settings.local.yaml"),
+                   "models"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Nemotron-3-Nano-4B-FP8" in out

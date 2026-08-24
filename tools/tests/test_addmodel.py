@@ -153,7 +153,7 @@ def test_gguf_entry_round_trips_through_validate_and_render(tmp_path, monkeypatc
     args = _args(tmp_path, "org/Foo-GGUF", gguf_file="Q4_K_M", dry_run=False, yes=True)
     assert addmodel.run(args) == 0
     # load() runs validate() (raises on any error) + resolves placeholders
-    settings, loaded = load(args.models, args.settings)
+    settings, loaded, _groups = load(args.models, args.settings)
     assert any(m.engine == "llamacpp" for m in loaded)
     out = render_llama_swap(loaded)
     assert "Foo-GGUF" in out and "/models/gguf/org/Foo-GGUF/Foo-Q4_K_M.gguf" in out

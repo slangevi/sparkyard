@@ -113,6 +113,14 @@ def _dispatch(args):
         print(f"✓ {len(models)} models valid")
         return 0
 
+    if args.cmd == "models":
+        from . import models_cmd
+        from .render import load as _load_ssot
+        settings, models_ = _load_ssot(args.models, args.settings)
+        print(models_cmd.render(models_, settings, on_disk=args.on_disk,
+                                engine=args.engine, as_json=args.as_json))
+        return 0
+
     if args.cmd == "doctor":
         lines, summary = doctor_mod.check(models, settings)
         for ln in lines:
@@ -190,6 +198,18 @@ def render(obj, llama_swap_out, litellm_out, env_out):
 def validate(obj):
     """Validate models.yaml + settings (fail-closed)."""
     return _dispatch(_ns(obj, "validate"))
+
+
+@cli.command()
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+@click.option("--on-disk", is_flag=True, help="Only models whose weights are present.")
+@click.option("--engine", type=click.Choice(["vllm", "llamacpp"]), default=None,
+              help="Filter by engine.")
+@click.pass_obj
+def models(obj, as_json, on_disk, engine):
+    """List configured models: engine, image, context, gmem, weights, aliases."""
+    return _dispatch(_ns(obj, "models", as_json=as_json, on_disk=on_disk,
+                         engine=engine))
 
 
 @cli.command()

@@ -9,6 +9,12 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-08-24
+
+Maintenance: every component pin brought current, and two fixes that came out of
+doing it — one in our own error reporting, one an upstream deprecation that would
+have failed silently on GB10.
+
 ### Fixed
 
 - **llama.cpp: `--no-mmap` replaced with `--load-mode none`.** Upstream deprecated
@@ -32,6 +38,15 @@ the prior work that inspired it.
   said nothing more than `error`. The reason is now printed under the row,
   collapsed to one line and length-capped so a multi-line registry error cannot
   wreck the table.
+
+### Dependencies
+
+- `ollama` `05b6fe51` → `57d60e68`; `litellm` `8402d237` → `5ead13ed`;
+  `litellm-db` `df7bca00` → `fe0737ba` (postgres 15.19); `open-webui`
+  `7f1b0a1a` → `6a773e5c`; `llama-swap` v224 → **v251** (27 releases).
+- `llama-cpp` rebuilt at `c060ca97` — 840 commits, now level with master. All ten
+  flags the compose passes were checked against the new binary before adopting,
+  and both on-disk GGUF models verified serving.
 
 ## [1.7.0] - 2026-08-24
 
@@ -318,6 +333,7 @@ NVIDIA DGX Spark (GB10).
   engines bind `127.0.0.1` and Postgres has no host port. Service healthchecks +
   `service_healthy` startup ordering.
 
+[1.7.1]: https://github.com/slangevi/sparkyard/releases/tag/v1.7.1
 [1.7.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.7.0
 [1.6.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.6.0
 [1.5.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.5.0

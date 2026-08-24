@@ -9,6 +9,12 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-24
+
+Fallout from a GB10 bring-up that cost two machine crashes. The through-line is
+things that reported success, did nothing, or described state they no longer
+matched — so most of this is about making the stack tell the truth about itself.
+
 ### Added
 
 - **`sparkyard doctor` warns on `--load-format fastsafetensors`.** It buffers the
@@ -259,6 +265,7 @@ NVIDIA DGX Spark (GB10).
   engines bind `127.0.0.1` and Postgres has no host port. Service healthchecks +
   `service_healthy` startup ordering.
 
+[1.6.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.6.0
 [1.5.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.5.0
 [1.4.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.4.0
 [1.3.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.3.0

@@ -91,7 +91,10 @@ make venv / test / lint    # bootstrap + dev (make-only)
 - **Container networking:** model containers spawn with
   `--network container:llama-swap` so they share llama-swap's namespace and bind
   `localhost:PORT` inside it. Never give them `network_mode: host`.
-- **llama.cpp on GB10:** needs `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` + `--no-mmap`.
+- **llama.cpp on GB10:** needs `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` + `--load-mode none`
+  (mmap is unsafe on unified memory). `--no-mmap` is the deprecated spelling;
+  `--load-mode auto` was measured to avoid mmap on this device anyway, but the
+  requirement is pinned rather than left to upstream device detection.
 - **Secrets:** one gitignored `secrets.env` is the only home for secret values;
   the generated `LiteLLM/config.yaml` references `os.environ/LITELLM_MASTER_KEY`,
   never inlining a secret.

@@ -59,7 +59,7 @@ models:
       -m {{ m.gguf }}
       --alias {{ m.name }}
       --port ${PORT} --host ${host}
-      --ctx-size {{ m.ctx_size }} --n-gpu-layers {{ m.n_gpu_layers }} --parallel {{ m.parallel }}{% if m.no_mmap %} --no-mmap{% endif %}
+      --ctx-size {{ m.ctx_size }} --n-gpu-layers {{ m.n_gpu_layers }} --parallel {{ m.parallel }}{% if m.no_mmap %} --load-mode none{% endif %}
 {%- if m.chat_template %}
       --jinja
       --chat-template-file {{ m.chat_template_path }}

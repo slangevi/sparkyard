@@ -146,6 +146,8 @@ class Model:
 
     @property
     def no_mmap(self):
+        """Emit `--load-mode none` (mmap is unsafe on GB10 unified memory).
+        Named for the deprecated `--no-mmap` spelling it replaced."""
         return self.raw.get("no_mmap", True)
 
     @property

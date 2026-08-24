@@ -198,3 +198,49 @@ def test_gmem_override_must_be_in_unit_interval():
     assert not any("override" in e.lower() for e in ok)
     errors = validate(load_models(_vllm(gmem={"min": 0.1, "max": 0.2, "override": True})))
     assert any("override" in e.lower() for e in errors)
+
+
+# --- groups (llama-swap routing.router.settings.groups) ---
+# Membership is validated fail-closed: llama-swap silently ignores a group whose
+# member is not a model ID, which reads as "my model never stays loaded".
+
+def _groups_ok():
+    return {"resident": {"swap": False, "exclusive": False, "persistent": True,
+                         "members": ["Nemotron-3-Nano-4B-FP8"]}}
+
+
+def test_valid_groups_have_no_errors():
+    assert validate(_models(), _groups_ok()) == []
+
+
+def test_group_member_must_be_a_known_model():
+    groups = {"resident": {"members": ["Nope-7B"]}}
+    errors = validate(_models(), groups)
+    assert any("Nope-7B" in e and "resident" in e for e in errors)
+
+
+def test_group_member_may_not_be_an_alias():
+    # llama-swap groups key off model IDs, not the aliases LiteLLM serves.
+    models = _models()
+    models[0].raw["aliases"] = ["shorthand"]
+    errors = validate(models, {"resident": {"members": ["shorthand"]}})
+    assert any("shorthand" in e for e in errors)
+
+
+def test_model_in_two_groups_detected():
+    name = "Nemotron-3-Nano-4B-FP8"
+    groups = {"a": {"members": [name]}, "b": {"members": [name]}}
+    errors = validate(_models(), groups)
+    assert any(name in e and "more than one group" in e for e in errors)
+
+
+def test_group_members_must_be_a_non_empty_list():
+    errors = validate(_models(), {"resident": {"members": []}})
+    assert any("resident" in e and "members" in e for e in errors)
+
+
+def test_group_flags_must_be_boolean():
+    groups = {"resident": {"persistent": "yes",
+                           "members": ["Nemotron-3-Nano-4B-FP8"]}}
+    errors = validate(_models(), groups)
+    assert any("persistent" in e for e in errors)

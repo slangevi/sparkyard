@@ -143,6 +143,13 @@ def _attention_layers(cfg, n_layers):
         n = pattern.count("*")
         if n:
             return n
+    # nemotron_h / nemotron_h_puzzle: a per-block list of
+    # 'mamba' | 'moe' | 'attention'; only the attention blocks hold a KV cache.
+    blocks = _extract_raw(cfg, "layers_block_type")
+    if isinstance(blocks, list) and blocks:
+        n = sum(1 for b in blocks if b == "attention")
+        if n:
+            return n
     return n_layers
 
 
@@ -155,6 +162,10 @@ def parse_config(model_host_path):
     except (ValueError, OSError) as e:
         _fatal(f"[auto-gmem] FATAL: could not read {cfgp}: {e}")
     n_layers = _extract(cfg, "num_hidden_layers")
+    if n_layers == 0:
+        blocks = _extract_raw(cfg, "layers_block_type")
+        if isinstance(blocks, list):
+            n_layers = len(blocks)
     n_heads = _extract(cfg, "num_attention_heads")
     n_kv = _extract(cfg, "num_key_value_heads")
     hidden = _extract(cfg, "hidden_size")

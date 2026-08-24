@@ -77,8 +77,9 @@ def _finish(args, entry, hints, *, input_fn):
               file=sys.stderr)
         return 1
     try:
-        settings, models = load(args.models, args.settings)
-        render_all(settings, models, args.llama_swap_out, args.litellm_out, args.env_out)
+        settings, models, groups = load(args.models, args.settings)
+        render_all(settings, models, args.llama_swap_out, args.litellm_out,
+                   args.env_out, groups)
     except RenderError as e:
         print(f"✗ entry appended, but render failed (fix models.yaml then `make render`): {e}",
               file=sys.stderr)

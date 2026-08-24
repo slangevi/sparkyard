@@ -9,7 +9,7 @@ SETTINGS = os.path.join(FIXTURES, "settings.local.yaml")
 
 
 def _render():
-    _settings, models = load(MODELS, SETTINGS)
+    _settings, models, _groups = load(MODELS, SETTINGS)
     return render_llama_swap(models)
 
 
@@ -66,7 +66,7 @@ from sparkyard.render import render_litellm
 
 
 def test_litellm_is_valid_yaml_with_expected_models():
-    _s, models = load(MODELS, SETTINGS)
+    _s, models, _g = load(MODELS, SETTINGS)
     doc = yaml.safe_load(render_litellm(models))
     names = [e["model_name"] for e in doc["model_list"]]
     assert "Nemotron-3-Nano-4B-FP8" in names
@@ -75,14 +75,14 @@ def test_litellm_is_valid_yaml_with_expected_models():
 
 
 def test_litellm_never_inlines_the_key():
-    _s, models = load(MODELS, SETTINGS)
+    _s, models, _g = load(MODELS, SETTINGS)
     out = render_litellm(models)
     assert "os.environ/LITELLM_MASTER_KEY" in out
     assert "sk-" not in out  # no literal key value
 
 
 def test_litellm_passes_through_params():
-    _s, models = load(MODELS, SETTINGS)
+    _s, models, _g = load(MODELS, SETTINGS)
     doc = yaml.safe_load(render_litellm(models))
     entry = next(e for e in doc["model_list"] if e["model_name"] == "Qwen3.6-35B-A3B-FP8")
     p = entry["litellm_params"]
@@ -96,7 +96,7 @@ from sparkyard.render import render_compose_env
 
 
 def test_compose_env_matches_golden():
-    settings, _models = load(MODELS, SETTINGS)
+    settings, _models, _g = load(MODELS, SETTINGS)
     out = render_compose_env(settings)
     with open(os.path.join(FIXTURES, "expected", "compose.env")) as f:
         expected = f.read()
@@ -222,3 +222,52 @@ def test_llamacpp_uses_load_mode_none_not_deprecated_no_mmap():
     out = _render()
     assert "--load-mode none" in out
     assert "--no-mmap" not in out, "the deprecated spelling must be gone"
+
+
+# --- groups -> routing.router.settings.groups ---
+
+def test_no_groups_emits_no_routing_block():
+    # Absent groups must leave the rendered config byte-identical to before the
+    # feature existed, so an unused knob cannot change swap behaviour.
+    assert "routing" not in yaml.safe_load(_render())
+
+
+def test_groups_render_into_routing_settings():
+    _s, models, _g = load(MODELS, SETTINGS)
+    groups = {"resident": {"swap": False, "exclusive": False, "persistent": True,
+                           "members": ["Nemotron-3-Nano-4B-FP8"]}}
+    doc = yaml.safe_load(render_llama_swap(models, groups))
+    router = doc["routing"]["router"]
+    assert router["use"] == "group"
+    grp = router["settings"]["groups"]["resident"]
+    assert grp["members"] == ["Nemotron-3-Nano-4B-FP8"]
+    assert (grp["swap"], grp["exclusive"], grp["persistent"]) == (False, False, True)
+
+
+# --- ready timeouts ---
+# llama-swap v251 has exactly one ready-wait control: the GLOBAL
+# healthCheckTimeout. There is no `readyTimeout` key at either level, so the
+# per-model value was silently ignored and every model was gated by whatever the
+# global said. A 50 GB model with ready_timeout: 1800 died at 900s:
+#   "[WARN] group: starting <model> failed: health check timed out after 15m0s"
+
+def test_health_check_timeout_covers_the_slowest_model():
+    _s, models, _g = load(MODELS, SETTINGS)
+    models[0].raw["ready_timeout"] = 1800   # a 50 GB NVFP4 model's cold load
+    doc = yaml.safe_load(render_llama_swap(models))
+    assert doc["healthCheckTimeout"] >= 1800
+
+
+def test_no_ready_timeout_key_is_emitted():
+    # Emitting a key llama-swap ignores advertises a knob that does nothing.
+    out = _render()
+    assert "readyTimeout" not in out
+
+
+def test_litellm_request_timeout_outlasts_a_cold_model_load():
+    # LiteLLM giving up mid-load looks identical to a broken model.
+    from sparkyard.render import render_litellm
+    _s, models, _g = load(MODELS, SETTINGS)
+    models[0].raw["ready_timeout"] = 1800
+    doc = yaml.safe_load(render_litellm(models))
+    assert doc["litellm_settings"]["request_timeout"] > 1800

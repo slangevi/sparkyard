@@ -1,6 +1,5 @@
   Nemotron-3-Nano-4B-FP8:
     ttl: 300
-    readyTimeout: 300
     checkEndpoint: "/health"
     cmd: >
       env

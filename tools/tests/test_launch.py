@@ -272,3 +272,37 @@ def test_parse_config_pattern_without_attention_marker_falls_back_to_all_layers(
     d = _model_dir(tmp_path, cfg, 1)
     n_layers, _, _, _, n_attn = launch.parse_config(d)
     assert (n_layers, n_attn) == (12, 12)
+
+
+# nemotron_h / nemotron_h_puzzle also ship the stack as `layers_block_type`, a
+# list of 'mamba' | 'moe' | 'attention'. Puzzle configs (NAS-derived) drop
+# `num_hidden_layers` entirely and the block list is the only layer count there is.
+
+def test_parse_config_counts_attention_layers_from_layers_block_type(tmp_path):
+    blocks = ["mamba", "moe"] * 23 + ["attention", "moe"] * 3
+    cfg = {"num_hidden_layers": 52, "num_attention_heads": 32,
+           "num_key_value_heads": 2, "head_dim": 128,
+           "layers_block_type": blocks}
+    d = _model_dir(tmp_path, cfg, 1)
+    n_layers, _, _, _, n_attn = launch.parse_config(d)
+    assert (n_layers, n_attn) == (52, 3)
+
+
+def test_parse_config_derives_layer_count_from_layers_block_type_when_absent(tmp_path):
+    # nemotron_h_puzzle: no num_hidden_layers; 88 blocks, 8 of them attention.
+    blocks = (["mamba", "moe"] * 40) + (["attention"] * 8)
+    cfg = {"num_attention_heads": 32, "num_key_value_heads": 2, "head_dim": 128,
+           "layers_block_type": blocks}
+    d = _model_dir(tmp_path, cfg, 1)
+    n_layers, _, _, _, n_attn = launch.parse_config(d)
+    assert (n_layers, n_attn) == (88, 8)
+
+
+def test_parse_config_block_list_without_attention_falls_back_to_all_layers(tmp_path):
+    # Never size the KV cache to zero on an uninterpretable block list.
+    cfg = {"num_hidden_layers": 8, "num_attention_heads": 8,
+           "num_key_value_heads": 8, "head_dim": 64,
+           "layers_block_type": ["mamba"] * 8}
+    d = _model_dir(tmp_path, cfg, 1)
+    n_layers, _, _, _, n_attn = launch.parse_config(d)
+    assert (n_layers, n_attn) == (8, 8)

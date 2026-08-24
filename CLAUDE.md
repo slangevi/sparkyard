@@ -115,7 +115,12 @@ make venv / test / lint    # bootstrap + dev (make-only)
 ## Conventions for contributions
 
 - Keep `models:` the last top-level key in `models.yaml` (the add-model
-  appender relies on it).
+  appender relies on it). `groups:`, if used, goes above it.
+- **`groups:`** (optional, top-level) mirrors llama-swap's
+  `routing.router.settings.groups`: it is the only way to keep a model resident
+  while others swap (a persistent, non-exclusive, non-swapping group). Members
+  are model *names*, not aliases; one group per model; validation is fail-closed
+  because llama-swap ignores a bad member silently.
 - Add a test under `tools/tests/` for generator changes (pytest) or
   `scripts/tests/` for shell changes; `make test` runs both and must stay green.
   `make lint` shellchecks the scripts (advisory).

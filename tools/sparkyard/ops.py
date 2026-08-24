@@ -4,6 +4,7 @@ injected `run` for testability (mirrors update.py); init's config seeding is pur
 import os
 import shutil
 import subprocess
+import time
 
 
 def secrets(root, *, run=subprocess.run):
@@ -16,6 +17,37 @@ def build(root, *, run=subprocess.run):
 
 def start(root, *, run=subprocess.run):
     return run(["docker", "compose", "up", "-d"], cwd=root).returncode
+
+
+# Services that consume generated config from a bind mount. `docker compose up -d`
+# cannot see those files change, so it leaves the old config running — a render is
+# not live until these restart.
+RELOAD_SERVICES = ("llama-swap", "litellm")
+
+
+def reload(root, *, run=subprocess.run, sleep=time.sleep, attempts=60):
+    """Restart the services that read generated config, then wait for health.
+
+    `render` writes files that are bind-mounted into running containers, so the
+    stack keeps serving the previous config until this runs. Waits on EVERY
+    restarted service: waiting on llama-swap alone races LiteLLM, which answers
+    "connection reset by peer" while it is still coming up."""
+    rc = run(["docker", "restart", *RELOAD_SERVICES], cwd=root).returncode
+    if rc != 0:
+        return rc
+    for svc in RELOAD_SERVICES:
+        for _ in range(attempts):
+            p = run(["docker", "inspect", "-f", "{{.State.Health.Status}}", svc],
+                    cwd=root, capture_output=True, text=True)
+            out = (getattr(p, "stdout", "") or "").strip()
+            # A service without a healthcheck reports nothing; treat as ready.
+            if out in ("healthy", "", "<no value>"):
+                break
+            sleep(1)
+        else:
+            print(f"✗ {svc} did not become healthy")
+            return 1
+    return 0
 
 
 def stop(root, *, run=subprocess.run):

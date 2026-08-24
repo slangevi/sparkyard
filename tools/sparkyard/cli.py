@@ -93,7 +93,7 @@ def _dispatch(args):
                           model=args.model,
                           use_wheels=getattr(args, "use_wheels", False), components=args.components)
 
-    if args.cmd in ("init", "secrets", "build", "start", "stop", "bench"):
+    if args.cmd in ("init", "secrets", "build", "start", "stop", "bench", "reload"):
         from . import ops
         root = _find_repo_root()
         if root is None:
@@ -211,6 +211,23 @@ def build(obj):
 def start(obj):
     """Start the stack (docker compose up -d)."""
     return _dispatch(_ns(obj, "start"))
+
+
+@cli.command()
+@click.option("--no-render", is_flag=True,
+              help="Skip the render; just restart the config-consuming services.")
+@click.pass_obj
+def reload(obj, no_render):
+    """Re-render, then restart the services that read the generated config.
+
+    `sparkyard start` is `docker compose up -d`, which cannot see a bind-mounted
+    config file change — so a render is not live until this runs."""
+    if not no_render:
+        rc = _dispatch(_ns(obj, "render", llama_swap_out=None, litellm_out=None,
+                           env_out=None))
+        if rc:
+            return rc
+    return _dispatch(_ns(obj, "reload"))
 
 
 @cli.command()

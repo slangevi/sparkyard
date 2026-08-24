@@ -63,7 +63,12 @@ services:
       - "19000"
       - --parallel
       - "4"          # Simultaneous request slots
-      - --no-mmap    # Disable memory-mapped I/O (required for unified memory on GB10)
+      # No mmap: required on GB10, where mmap is unsafe on unified memory.
+      # Replaces the deprecated --no-mmap. `auto` was measured to avoid mmap on
+      # this device already, but the requirement is a correctness constraint, so
+      # it is pinned rather than left to upstream device detection.
+      - --load-mode
+      - none
       - --context-shift
       - --models-dir
       - /models

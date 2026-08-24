@@ -212,3 +212,13 @@ def test_cli_render_default_env_out_is_dotenv(tmp_path):
     assert r.returncode == 0, r.stderr
     assert (tmp_path / ".env").exists()              # default is now .env
     assert not (tmp_path / ".env.sparkyard").exists()
+
+
+def test_llamacpp_uses_load_mode_none_not_deprecated_no_mmap():
+    # llama-server deprecated --no-mmap in favour of --load-mode. GB10 needs
+    # non-mmap loading (mmap is unsafe on unified memory), so the flag stays
+    # pinned rather than relying on `auto` device detection -- but spelled the
+    # way upstream still supports.
+    out = _render()
+    assert "--load-mode none" in out
+    assert "--no-mmap" not in out, "the deprecated spelling must be gone"

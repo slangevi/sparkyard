@@ -9,6 +9,19 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **llama.cpp: `--no-mmap` replaced with `--load-mode none`.** Upstream deprecated
+  `--mmap`/`--no-mmap` in favour of `--load-mode`. GB10 requires non-mmap loading
+  (mmap is unsafe on unified memory), so the flag could not simply be dropped.
+  Measured first: with `--load-mode auto` the model loads and the GGUF is *not*
+  mapped (0 `.gguf` entries in `/proc/<pid>/maps` against 95 `.so`), so `auto`
+  does detect the device correctly — but the requirement is pinned explicitly
+  rather than left to upstream detection, since a regression there would be
+  silent. The generator emitted the deprecated flag for **every** llamacpp model,
+  so the fix spans the Jinja template as well as `docker-compose.yml`; README and
+  CLAUDE.md, which both documented `--no-mmap` as required, are corrected.
+
 ### Changed
 
 - **`sparkyard update` reports why a digest resolution failed.** The resolver

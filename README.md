@@ -172,7 +172,7 @@ quant:
 
 - `sparkyard add-model bartowski/Qwen2.5-3B-Instruct-GGUF --gguf-file Q4_K_M`
   selects by substring; omit `--gguf-file` to get an interactive menu.
-- The wizard emits a `llamacpp` entry (GB10 flags `--no-mmap` + unified memory,
+- The wizard emits a `llamacpp` entry (GB10 flags `--load-mode none` + unified memory,
   `--jinja`) and infers `ctx_size` from the repo's `config.json` when present,
   else defaults to 8192 with a warning to adjust.
 - `--gguf-file Q4_K_M --download` (or a later `sparkyard download`) fetches
@@ -224,8 +224,12 @@ few things non-obvious:
   from `models.yaml` by `sparkyard render`. (The generator emits each launcher
   invocation as one folded `cmd:` line and is test-guarded against a YAML
   blank-line pitfall that would otherwise split it.)
-- **llama.cpp needs `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` and `--no-mmap`** (mmap is
-  unsafe on unified memory).
+- **llama.cpp needs `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` and `--load-mode none`**
+  (mmap is unsafe on unified memory). `--no-mmap` still works but upstream has
+  deprecated it in favour of `--load-mode`. `auto` was measured to already avoid
+  mmap on GB10 — verified via `/proc/<pid>/maps`, zero `.gguf` mappings against 95
+  `.so` — but this is a correctness constraint, so it is pinned explicitly rather
+  than left to device detection.
 - **llama-cpp is pinned to a recorded commit ref** (in `llama-cpp/llama-cpp.Dockerfile`)
   rather than floating to HEAD; run `sparkyard update llama-cpp` to check for new commits
   and rebuild at the latest `ggml-org/llama.cpp@master`.

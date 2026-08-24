@@ -75,7 +75,7 @@ def test_bench_dispatches_with_flags(monkeypatch, tmp_path):
     import sparkyard.ops as ops
     captured = {}
     monkeypatch.setattr(ops, "bench",
-                        lambda root, mode, base_url: captured.update(root=root, mode=mode, url=base_url) or 0)
+                        lambda root, mode, base_url, model=None: captured.update(root=root, mode=mode, url=base_url) or 0)
     (tmp_path / "models.example.yaml").write_text("models: []\n")
     monkeypatch.chdir(tmp_path)
     from sparkyard import cli

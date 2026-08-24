@@ -139,3 +139,17 @@ def test_reload_returns_nonzero_when_restart_fails():
     def run(argv, cwd=None, env=None):
         return types.SimpleNamespace(returncode=1 if "restart" in argv else 0)
     assert ops.reload("/repo", run=run) != 0
+
+
+def test_bench_model_flag_scopes_the_sweep():
+    # MODELS= shipped as an env var while every other option is a flag.
+    calls = []
+    ops.bench("/repo", model=["a", "b"], run=_fake_run(calls))
+    env = calls[0]["env"] or {}
+    assert env.get("MODELS") == "a b", env
+
+
+def test_bench_without_model_leaves_the_sweep_unscoped():
+    calls = []
+    ops.bench("/repo", run=_fake_run(calls))
+    assert "MODELS" not in (calls[0]["env"] or {})

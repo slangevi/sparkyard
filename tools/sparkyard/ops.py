@@ -56,10 +56,15 @@ def stop(root, *, run=subprocess.run):
     return run(["docker", "compose", "down"], cwd=root).returncode
 
 
-def bench(root, mode=None, base_url=None, *, run=subprocess.run):
+def bench(root, mode=None, base_url=None, model=None, *, run=subprocess.run):
+    """Run the benchmark sweep. `model` scopes it; unscoped, bench.sh loads every
+    discovered model in turn, which on unified memory is a memory event rather
+    than merely a slow one."""
     env = dict(os.environ, MODE=mode or "quality")
     if base_url:
         env["BASE_URL"] = base_url
+    if model:
+        env["MODELS"] = " ".join(model)
     return run(["bash", "scripts/bench.sh"], cwd=root, env=env).returncode
 
 

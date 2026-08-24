@@ -774,3 +774,12 @@ def test_report_prints_the_error_reason(capsys):
     text = out if isinstance(out, str) else "\n".join(out)
     assert "error" in text
     assert "403" in text, f"the reason must reach the report:\n{text}"
+
+
+def test_apply_message_says_the_pins_are_not_live_yet():
+    # `update` pulls/builds but never recreates containers, so the stack keeps
+    # running the old images. The old wording ("pulled/built the changed
+    # services") read as done and hid that for a full session.
+    import inspect as _i
+    src = _i.getsource(update)
+    assert "sparkyard reload" in src, "the apply message must point at reload"

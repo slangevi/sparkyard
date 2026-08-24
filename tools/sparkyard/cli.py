@@ -100,7 +100,8 @@ def _dispatch(args):
             print(f"✗ could not locate a sparkyard checkout (no {MARKER})", file=sys.stderr)
             return 2
         if args.cmd == "bench":
-            return ops.bench(root, args.mode, args.base_url)
+            return ops.bench(root, args.mode, args.base_url,
+                             model=list(getattr(args, "model", None) or []))
         return getattr(ops, args.cmd)(root)
 
     try:
@@ -378,10 +379,13 @@ def update(obj, components, check, notes, model, use_wheels):
 @click.option("--mode", type=click.Choice(["quality", "speed"]), default=None,
               help="Benchmark mode (quality or speed).")
 @click.option("--base-url", default=None, help="Override the gateway base URL.")
+@click.option("--model", multiple=True,
+              help="Scope the sweep to this model (repeatable). Unscoped, every "
+                   "discovered model is loaded in turn.")
 @click.pass_obj
-def bench(obj, mode, base_url):
+def bench(obj, mode, base_url, model):
     """Benchmark the served models."""
-    return _dispatch(_ns(obj, "bench", mode=mode, base_url=base_url))
+    return _dispatch(_ns(obj, "bench", mode=mode, base_url=base_url, model=model))
 
 
 def main(argv=None):

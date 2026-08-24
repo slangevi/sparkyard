@@ -13,8 +13,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Pinned, checksummed llama-swap release (was releases/latest, unverified).
-ARG LLAMA_SWAP_VERSION=224
-ARG LLAMA_SWAP_SHA256=d62c1d140a6ba3482c50b19f254b085f116a1d3d282a9d0f1ff4113b8a56f4cd
+ARG LLAMA_SWAP_VERSION=251
+ARG LLAMA_SWAP_SHA256=777bfa16b2ef6a78ad36f1e0c28b5dd4adda1dc0cc9aea32b6fba8e1c5a41de9
 RUN mkdir -p /tmp/llama-swap-build && cd /tmp/llama-swap-build && \
     wget -q "https://github.com/mostlygeek/llama-swap/releases/download/v${LLAMA_SWAP_VERSION}/llama-swap_${LLAMA_SWAP_VERSION}_linux_arm64.tar.gz" && \
     echo "${LLAMA_SWAP_SHA256}  llama-swap_${LLAMA_SWAP_VERSION}_linux_arm64.tar.gz" | sha256sum -c - && \

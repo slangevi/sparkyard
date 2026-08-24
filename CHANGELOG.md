@@ -9,6 +9,17 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Changed
+
+- **`sparkyard update` reports why a digest resolution failed.** The resolver
+  exception already carried the registry's explanation; `plan_image_updates`
+  discarded it and printed the bare status `error`. An expired ghcr.io token in
+  the operator's docker config (offered where no credential was needed, answered
+  with 403) left two components on stale pins for two releases while the table
+  said nothing more than `error`. The reason is now printed under the row,
+  collapsed to one line and length-capped so a multi-line registry error cannot
+  wreck the table.
+
 ## [1.7.0] - 2026-08-24
 
 Two corrections that only surfaced once a second, larger model was exercised on

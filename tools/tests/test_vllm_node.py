@@ -14,12 +14,11 @@ def _argvs(plan):
     return [step.argv for step in plan]
 
 
-def test_clone_when_absent_then_base_and_tf5():
-    plan = vllm_node.build_plan(CFG, ["base", "tf5"], "7852e50e4", clone_exists=False)
+def test_clone_when_absent_then_builds_base():
+    plan = vllm_node.build_plan(CFG, ["base"], "7852e50e4", clone_exists=False)
     argvs = _argvs(plan)
     assert argvs[0] == ["git", "clone", CFG.upstream, CFG.clone_path]
     assert ["./build-and-copy.sh", "--vllm-ref", "7852e50e4"] in argvs
-    assert ["./build-and-copy.sh", "--tf5", "--vllm-ref", "7852e50e4"] in argvs
 
 
 def test_fetch_when_clone_present():
@@ -55,14 +54,22 @@ def test_build_plan_never_checks_out_vllm_ref_in_tooling_clone():
     # build_plan must never `git checkout <ref>` in the tooling clone — doing so
     # aborts the build ("pathspec did not match") on a fresh clone.
     for clone_exists in (True, False):
-        argvs = _argvs(vllm_node.build_plan(CFG, ["base", "tf5"], "7852e50e4",
+        argvs = _argvs(vllm_node.build_plan(CFG, ["base", "mxfp4"], "7852e50e4",
                                             clone_exists=clone_exists))
         assert not any(a[:2] == ["git", "checkout"] for a in argvs)
         assert ["./build-and-copy.sh", "--vllm-ref", "7852e50e4"] in argvs
 
 
-def test_default_variants_constant():
-    assert vllm_node.DEFAULT_VARIANTS == ["base", "tf5"]
+def test_default_variants_is_base_only():
+    # tf5 was "base + transformers v5". Upstream made v5 the default and reduced
+    # --tf5 to a tag alias ("no longer alter[s] dependency resolution"), so the two
+    # images build byte-equivalent — verified: same vllm, torch, transformers 5.15.1
+    # and flashinfer. Building it cost ~30 min of Rust compilation for a duplicate.
+    assert vllm_node.DEFAULT_VARIANTS == ["base"]
+
+
+def test_tf5_is_no_longer_a_buildable_variant():
+    assert "tf5" not in vllm_node._REF_VARIANTS
 
 
 def _args(variant=None, vllm_ref=None, dry_run=False):
@@ -179,7 +186,7 @@ def test_use_wheels_defaults_off():
 
 
 def test_use_wheels_applies_to_every_variant():
-    plan = vllm_node.build_plan(CFG, ["base", "tf5"], "7852e50e4", clone_exists=True,
+    plan = vllm_node.build_plan(CFG, ["base", "mxfp4"], "7852e50e4", clone_exists=True,
                                 use_wheels=True)
     builds = [a for a in _argvs(plan) if a[0] == "./build-and-copy.sh"]
     assert len(builds) == 2

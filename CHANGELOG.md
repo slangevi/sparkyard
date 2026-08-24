@@ -9,6 +9,18 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Removed
+
+- **The `tf5` build variant.** It existed to layer Transformers v5 on top of the
+  base image. Upstream made v5 the default and reduced `--tf5` to a tag alias
+  that, in its own words, "no longer alter[s] dependency resolution" — so it
+  built a byte-equivalent duplicate of `base` at the cost of a full Rust
+  toolchain compile (~30 min, versus ~11 for base). Verified identical before
+  removal: same vLLM commit, torch 2.13.0, transformers 5.15.1, flashinfer
+  0.6.18. `DEFAULT_VARIANTS` is now `["base"]`, so the default build no longer
+  produces the duplicate, and `--variant tf5` is rejected. Point any entry
+  pinned to `vllm-node-tf5:latest` at `vllm-node:latest`.
+
 ### Fixed
 
 - **The README's peak-memory formula is labelled as a steady-state estimate.** It

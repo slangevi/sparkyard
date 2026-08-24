@@ -9,16 +9,18 @@ import subprocess
 import sys
 from collections import namedtuple
 
-# Default image set when no --variant is given. base + tf5 share the pinned ref.
-DEFAULT_VARIANTS = ["base", "tf5"]
+# Default image set when no --variant is given. tf5 was dropped: upstream reduced
+# --tf5 to a tag alias once Transformers v5 became the default, so it built a
+# byte-equivalent duplicate of base at the cost of a full Rust toolchain compile.
+DEFAULT_VARIANTS = ["base"]
 
 # A unit of work: a human label, a working dir (None = run from CWD), and argv.
 Step = namedtuple("Step", "description cwd argv")
 
 # Per-variant build-and-copy.sh argv (ref appended for the ref-pinned variants).
+# mxfp4 is handled separately below; it tracks its own ref.
 _REF_VARIANTS = {
     "base": [],
-    "tf5": ["--tf5"],
 }
 
 

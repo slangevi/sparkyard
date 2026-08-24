@@ -256,8 +256,8 @@ def download(obj, model):
 
 
 @cli.command("vllm-node")
-@click.option("--variant", type=click.Choice(["base", "tf5", "mxfp4"]), default=None,
-              help="Single variant to build; default builds base + tf5.")
+@click.option("--variant", type=click.Choice(["base", "mxfp4"]), default=None,
+              help="Single variant to build; default builds base.")
 @click.option("--vllm-ref", default=None, help="Override the settings vllm_ref pin.")
 @click.option("--use-wheels", is_flag=True,
               help="Build only the runner from prebuilt wheels (minutes, not ~30; "

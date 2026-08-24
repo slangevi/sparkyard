@@ -30,7 +30,7 @@ def test_commands_listed_in_lifecycle_order_not_alphabetical():
 def test_vllm_node_help_shows_choices_and_description():
     result = CliRunner().invoke(cli.cli, ["vllm-node", "--help"])
     assert result.exit_code == 0
-    assert "[base|tf5|mxfp4]" in result.output
+    assert "[base|mxfp4]" in result.output
     assert "Clone + build the vllm-node serving image(s)." in result.output
 
 

@@ -9,6 +9,29 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Removed
+
+- **The `tf5` build variant.** It existed to layer Transformers v5 on top of the
+  base image. Upstream made v5 the default and reduced `--tf5` to a tag alias
+  that, in its own words, "no longer alter[s] dependency resolution" — so it
+  built a byte-equivalent duplicate of `base` at the cost of a full Rust
+  toolchain compile (~30 min, versus ~11 for base). Verified identical before
+  removal: same vLLM commit, torch 2.13.0, transformers 5.15.1, flashinfer
+  0.6.18. `DEFAULT_VARIANTS` is now `["base"]`, so the default build no longer
+  produces the duplicate, and `--variant tf5` is rejected. Point any entry
+  pinned to `vllm-node-tf5:latest` at `vllm-node:latest`.
+
+### Fixed
+
+- **The README's peak-memory formula is labelled as a steady-state estimate.** It
+  was fitted on one 27B model varying only `gmem`, and presented as general
+  guidance. A second model contradicts it: 34.9GiB of weights at `gmem 0.40`
+  settled at 58.7GB (close to the predicted 65GB) but peaked at **95GB during
+  load** — ~36GB above its own steady state, where the 21.8GiB model showed
+  almost no spike. The load transient is what actually crashes a unified-memory
+  box, so the section now separates resident footprint from load peak and says
+  the transient has not been isolated.
+
 ## [1.6.0] - 2026-08-24
 
 Fallout from a GB10 bring-up that cost two machine crashes. The through-line is

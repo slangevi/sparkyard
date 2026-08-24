@@ -198,13 +198,22 @@ few things non-obvious:
   Peak RAM tracks it linearly, so `gmem` is arithmetic rather than guesswork:
 
   ```
-  peak ≈ fixed_overhead + gmem × (SYSTEM_RAM_CEILING_GIB − cuda_overhead)
-       ≈ 20.5 GB        + gmem × 111.51 GB          # measured on a 128 GB GB10
+  steady state ≈ fixed_overhead + gmem × (SYSTEM_RAM_CEILING_GIB − cuda_overhead)
+               ≈ 20.5 GB        + gmem × 111.51 GB     # one 27B model, 128 GB GB10
   ```
 
-  Measured points on one box: `gmem 0.30 → 54 GB`, `gmem 0.70 → 98 GB`. Raising
-  `gmem` to win back KV cache costs system RAM one-for-one. `sparkyard doctor`
-  warns when a model's weights alone exceed its budget.
+  Measured points: `gmem 0.30 → 54 GB`, `gmem 0.70 → 98 GB`. Raising `gmem` to win
+  back KV cache costs system RAM one-for-one. `sparkyard doctor` warns when a
+  model's weights alone exceed its budget.
+
+  **This estimates the resident footprint, not the peak.** Loading can transiently
+  exceed it, and by a lot: a 34.9 GiB model at `gmem 0.40` settled at 58.7 GB —
+  close to the 65 GB the formula predicts — after peaking at **95 GB** during load,
+  ~36 GB above its own steady state. A 21.8 GiB model showed almost no such spike.
+  The transient appears to scale with weight size and with allocation-heavy flags
+  (`max_num_seqs`, CUDA-graph capture, attention backend), but it has not been
+  isolated. Treat the formula as a floor for planning and leave headroom for the
+  load, which is when the box is actually at risk.
 - **Avoid `--load-format fastsafetensors` on unified memory.** It buffers the
   whole weight set while CUDA reserves its budget, so both live in the same pool
   at once. Measured on a 21.8 GiB model, one flag changed: **86 GiB peak with it,

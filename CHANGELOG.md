@@ -9,6 +9,17 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-08-24
+
+The theme the last release kept hitting — steps that report success without
+having done the thing — turns out to have applied to the configuration itself.
+Refreshing this box's model lineup meant trying to actually load models that had
+only ever been *configured*, and three knobs turned out to be decorative: a
+per-model `ready_timeout:` that llama-swap has no key for and silently ignored,
+a KV-cache estimate that counted Mamba blocks as attention layers, and no way at
+all to say "keep this small model loaded". A 50 GB model failed by 88 seconds
+against a ceiling nothing in `models.yaml` could raise.
+
 ### Added
 
 - **`groups:` in `models.yaml`** — an optional top-level key, mirroring

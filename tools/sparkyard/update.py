@@ -502,5 +502,10 @@ def run(root, settings, *, check=False, notes=False, model=None, components=None
         print("  Review `git diff` and commit when you're happy.")
         return 1
     print("\n✓ Bumped pins in the tracked files and pulled/built the changed services.")
+    # The images are on disk but the running containers still use the old ones:
+    # nothing here recreates them. Saying "done" without this hid a stale ollama
+    # for a full session while `--check` cheerfully reported "up to date".
+    print("  Pins are staged, not live — run `sparkyard reload` (or "
+          "`docker compose up -d`) to recreate the affected containers.")
     print("  Review `git diff` and commit when you're happy.")
     return 0

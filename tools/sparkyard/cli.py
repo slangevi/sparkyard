@@ -93,14 +93,15 @@ def _dispatch(args):
                           model=args.model,
                           use_wheels=getattr(args, "use_wheels", False), components=args.components)
 
-    if args.cmd in ("init", "secrets", "build", "start", "stop", "bench"):
+    if args.cmd in ("init", "secrets", "build", "start", "stop", "bench", "reload"):
         from . import ops
         root = _find_repo_root()
         if root is None:
             print(f"✗ could not locate a sparkyard checkout (no {MARKER})", file=sys.stderr)
             return 2
         if args.cmd == "bench":
-            return ops.bench(root, args.mode, args.base_url)
+            return ops.bench(root, args.mode, args.base_url,
+                             model=list(getattr(args, "model", None) or []))
         return getattr(ops, args.cmd)(root)
 
     try:
@@ -111,6 +112,44 @@ def _dispatch(args):
 
     if args.cmd == "validate":
         print(f"✓ {len(models)} models valid")
+        return 0
+
+    if args.cmd == "explain":
+        import subprocess as _sp
+        import yaml as _yaml
+        from . import explain as _explain
+        root = _find_repo_root()
+        if root is None:
+            print(f"✗ could not locate a sparkyard checkout (no {MARKER})", file=sys.stderr)
+            return 2
+        cfgp = os.path.join(root, "llama-swap", "config.yaml")
+        try:
+            cfg = _yaml.safe_load(open(cfgp))
+        except OSError:
+            print(f"✗ {cfgp} not found — run `sparkyard render` first", file=sys.stderr)
+            return 1
+        try:
+            argv_ = _explain.print_argv(cfg, args.model)
+        except _explain.ExplainError as e:
+            print(f"✗ {e}", file=sys.stderr)
+            return 1
+        # Pass argv straight through: re-joining a shlex.split list with spaces
+        # loses the quoting around EXTRA_DOCKER_ARGS and env chokes on the shards.
+        p = _sp.run(["docker", "exec", "llama-swap", *argv_],
+                    capture_output=True, text=True)
+        blob = (p.stdout or "") + (p.stderr or "")
+        summary = _explain.summarise(blob)
+        print(summary or blob.strip()[:400])
+        if args.show_argv:
+            print("\n" + blob[blob.find("docker"):].strip() if "docker" in blob else "")
+        return 0
+
+    if args.cmd == "models":
+        from . import models_cmd
+        from .render import load as _load_ssot
+        settings, models_ = _load_ssot(args.models, args.settings)
+        print(models_cmd.render(models_, settings, on_disk=args.on_disk,
+                                engine=args.engine, as_json=args.as_json))
         return 0
 
     if args.cmd == "doctor":
@@ -193,6 +232,28 @@ def validate(obj):
 
 
 @cli.command()
+@click.argument("model")
+@click.option("--argv", is_flag=True,
+              help="Print the full docker argv too, not just the sizing.")
+@click.pass_obj
+def explain(obj, model, argv):
+    """Dry-run a model's launcher: show the gmem plan without loading it."""
+    return _dispatch(_ns(obj, "explain", model=model, show_argv=argv))
+
+
+@cli.command()
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+@click.option("--on-disk", is_flag=True, help="Only models whose weights are present.")
+@click.option("--engine", type=click.Choice(["vllm", "llamacpp"]), default=None,
+              help="Filter by engine.")
+@click.pass_obj
+def models(obj, as_json, on_disk, engine):
+    """List configured models: engine, image, context, gmem, weights, aliases."""
+    return _dispatch(_ns(obj, "models", as_json=as_json, on_disk=on_disk,
+                         engine=engine))
+
+
+@cli.command()
 @click.pass_obj
 def doctor(obj):
     """Advisory on-disk model report (never blocks render)."""
@@ -211,6 +272,23 @@ def build(obj):
 def start(obj):
     """Start the stack (docker compose up -d)."""
     return _dispatch(_ns(obj, "start"))
+
+
+@cli.command()
+@click.option("--no-render", is_flag=True,
+              help="Skip the render; just restart the config-consuming services.")
+@click.pass_obj
+def reload(obj, no_render):
+    """Re-render, then restart the services that read the generated config.
+
+    `sparkyard start` is `docker compose up -d`, which cannot see a bind-mounted
+    config file change — so a render is not live until this runs."""
+    if not no_render:
+        rc = _dispatch(_ns(obj, "render", llama_swap_out=None, litellm_out=None,
+                           env_out=None))
+        if rc:
+            return rc
+    return _dispatch(_ns(obj, "reload"))
 
 
 @cli.command()
@@ -301,10 +379,13 @@ def update(obj, components, check, notes, model, use_wheels):
 @click.option("--mode", type=click.Choice(["quality", "speed"]), default=None,
               help="Benchmark mode (quality or speed).")
 @click.option("--base-url", default=None, help="Override the gateway base URL.")
+@click.option("--model", multiple=True,
+              help="Scope the sweep to this model (repeatable). Unscoped, every "
+                   "discovered model is loaded in turn.")
 @click.pass_obj
-def bench(obj, mode, base_url):
+def bench(obj, mode, base_url, model):
     """Benchmark the served models."""
-    return _dispatch(_ns(obj, "bench", mode=mode, base_url=base_url))
+    return _dispatch(_ns(obj, "bench", mode=mode, base_url=base_url, model=model))
 
 
 def main(argv=None):

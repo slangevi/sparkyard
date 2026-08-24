@@ -113,6 +113,36 @@ def _dispatch(args):
         print(f"✓ {len(models)} models valid")
         return 0
 
+    if args.cmd == "explain":
+        import subprocess as _sp
+        import yaml as _yaml
+        from . import explain as _explain
+        root = _find_repo_root()
+        if root is None:
+            print(f"✗ could not locate a sparkyard checkout (no {MARKER})", file=sys.stderr)
+            return 2
+        cfgp = os.path.join(root, "llama-swap", "config.yaml")
+        try:
+            cfg = _yaml.safe_load(open(cfgp))
+        except OSError:
+            print(f"✗ {cfgp} not found — run `sparkyard render` first", file=sys.stderr)
+            return 1
+        try:
+            argv_ = _explain.print_argv(cfg, args.model)
+        except _explain.ExplainError as e:
+            print(f"✗ {e}", file=sys.stderr)
+            return 1
+        # Pass argv straight through: re-joining a shlex.split list with spaces
+        # loses the quoting around EXTRA_DOCKER_ARGS and env chokes on the shards.
+        p = _sp.run(["docker", "exec", "llama-swap", *argv_],
+                    capture_output=True, text=True)
+        blob = (p.stdout or "") + (p.stderr or "")
+        summary = _explain.summarise(blob)
+        print(summary or blob.strip()[:400])
+        if args.show_argv:
+            print("\n" + blob[blob.find("docker"):].strip() if "docker" in blob else "")
+        return 0
+
     if args.cmd == "models":
         from . import models_cmd
         from .render import load as _load_ssot
@@ -198,6 +228,16 @@ def render(obj, llama_swap_out, litellm_out, env_out):
 def validate(obj):
     """Validate models.yaml + settings (fail-closed)."""
     return _dispatch(_ns(obj, "validate"))
+
+
+@cli.command()
+@click.argument("model")
+@click.option("--argv", is_flag=True,
+              help="Print the full docker argv too, not just the sizing.")
+@click.pass_obj
+def explain(obj, model, argv):
+    """Dry-run a model's launcher: show the gmem plan without loading it."""
+    return _dispatch(_ns(obj, "explain", model=model, show_argv=argv))
 
 
 @cli.command()

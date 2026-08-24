@@ -9,6 +9,12 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-08-24
+
+Two corrections that only surfaced once a second, larger model was exercised on
+GB10 — one to guidance that had been over-generalised from a single measurement,
+one to a build variant that upstream had quietly turned into a no-op.
+
 ### Removed
 
 - **The `tf5` build variant.** It existed to layer Transformers v5 on top of the
@@ -288,6 +294,7 @@ NVIDIA DGX Spark (GB10).
   engines bind `127.0.0.1` and Postgres has no host port. Service healthchecks +
   `service_healthy` startup ordering.
 
+[1.7.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.7.0
 [1.6.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.6.0
 [1.5.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.5.0
 [1.4.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.4.0

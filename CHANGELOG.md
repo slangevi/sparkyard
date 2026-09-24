@@ -9,6 +9,19 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Claude Code runs died the first time the agent read an image it had
+  generated.** LiteLLM bridges Anthropic `/v1/messages` for `openai/`
+  deployments through the OpenAI Responses API, and its adapter emits
+  `input_image` items without the `detail` field vLLM's Responses schema
+  requires — vLLM answered 400 with the whole request echoed per validation
+  error (a 51 MB body). The generated `litellm_settings` now set
+  `use_chat_completions_url_for_anthropic_messages: true`, so every deployment
+  serves `/v1/messages` through `/v1/chat/completions`, where tool-result
+  images are hoisted into a user message the model can see. Side effect worth
+  having: the model's reasoning now comes back as thinking blocks.
+
 ## [1.9.0] - 2026-08-24
 
 The theme the last release kept hitting — steps that report success without

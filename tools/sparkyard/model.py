@@ -51,7 +51,15 @@ class Model:
 
     @property
     def litellm(self):
-        return self.raw.get("litellm", {})
+        params = dict(self.raw.get("litellm", {}))
+        # drop_params strips reasoning_effort for an openai/ deployment of a model
+        # LiteLLM does not know, so Claude Code's effortLevel never reached the
+        # chat template. vLLM ignores the kwarg for templates that don't read it.
+        # An explicit allowed_openai_params in models.yaml wins.
+        if (self.engine == "vllm" and params.get("mode") != "embedding"
+                and params.get("supports_reasoning") is not False):
+            params.setdefault("allowed_openai_params", ["reasoning_effort"])
+        return params
 
     @property
     def hf_repo(self):

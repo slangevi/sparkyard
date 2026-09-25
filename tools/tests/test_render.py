@@ -283,3 +283,41 @@ def test_litellm_routes_anthropic_messages_through_chat_completions():
     _settings, models, _groups = load(MODELS, SETTINGS)
     doc = yaml.safe_load(render_litellm(models))
     assert doc["litellm_settings"]["use_chat_completions_url_for_anthropic_messages"] is True
+
+
+def _litellm_params(models, name):
+    doc = yaml.safe_load(render_litellm(models))
+    return next(e for e in doc["model_list"] if e["model_name"] == name)["litellm_params"]
+
+
+def test_litellm_forwards_reasoning_effort_for_vllm_chat_models():
+    """Claude Code's effortLevel arrives as output_config.effort, which the
+    /v1/messages -> chat-completions bridge turns into reasoning_effort. With
+    drop_params on, LiteLLM strips that param for an openai/ deployment of a
+    model it does not know, so the chat template's default effort applied to
+    every request. allowed_openai_params exempts it."""
+    _s, models, _g = load(MODELS, SETTINGS)
+    assert _litellm_params(models, "Qwen3.6-35B-A3B-FP8")["allowed_openai_params"] == ["reasoning_effort"]
+    # No supports_reasoning key at all still counts: the template decides.
+    assert _litellm_params(models, "Nemotron-3-Nano-4B-FP8")["allowed_openai_params"] == ["reasoning_effort"]
+
+
+def test_litellm_reasoning_effort_default_skips_non_reasoning_and_other_engines():
+    _s, models, _g = load(MODELS, SETTINGS)
+    by_name = {m.name: m for m in models}
+    by_name["Nemotron-3-Nano-4B-FP8"].raw.setdefault("litellm", {})["supports_reasoning"] = False
+    by_name["Qwen3.6-35B-A3B-FP8"].raw["litellm"]["mode"] = "embedding"
+    assert "allowed_openai_params" not in _litellm_params(models, "Nemotron-3-Nano-4B-FP8")
+    assert "allowed_openai_params" not in _litellm_params(models, "Qwen3.6-35B-A3B-FP8")
+    # llama.cpp's server does not take reasoning_effort the same way; leave it alone.
+    assert "allowed_openai_params" not in _litellm_params(models, "Qwen3.6-27B-uncensored-heretic-NVFP4")
+
+
+def test_litellm_explicit_allowed_openai_params_wins():
+    _s, models, _g = load(MODELS, SETTINGS)
+    m = next(m for m in models if m.name == "Qwen3.6-35B-A3B-FP8")
+    m.raw["litellm"]["allowed_openai_params"] = ["reasoning_effort", "top_k"]
+    out = render_litellm(models)
+    assert _litellm_params(models, "Qwen3.6-35B-A3B-FP8")["allowed_openai_params"] == ["reasoning_effort", "top_k"]
+    block = out.split("model_name: Qwen3.6-35B-A3B-FP8")[1].split("model_name:")[0]
+    assert block.count("allowed_openai_params") == 1

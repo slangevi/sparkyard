@@ -21,6 +21,16 @@ the prior work that inspired it.
 
 ### Fixed
 
+- **Claude Code's effort setting never reached the model.** Since `/v1/messages`
+  goes through chat completions (below), Claude Code's `effortLevel` arrives as
+  `reasoning_effort` — and `drop_params` strips that for an `openai/` deployment
+  of a model LiteLLM does not know, so the chat template's own default applied to
+  every request (for Qwen3.8 that is `xhigh`). Every vLLM chat deployment now
+  renders `allowed_openai_params: ["reasoning_effort"]` unless its `litellm:`
+  block sets `supports_reasoning: false`, `mode: embedding`, or its own
+  `allowed_openai_params`. Check it by asking the model to quote its system
+  prompt's effort line, or compare prompt token counts per effort.
+
 - **Claude Code runs died the first time the agent read an image it had
   generated.** LiteLLM bridges Anthropic `/v1/messages` for `openai/`
   deployments through the OpenAI Responses API, and its adapter emits

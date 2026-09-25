@@ -9,6 +9,16 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Changed
+
+- **vLLM cold loads keep their compile and autotune caches.** Model containers
+  run `--rm`, so torch.compile artifacts and FlashInfer's fp4 GEMM autotune
+  results under `/root/.cache/vllm` were rebuilt on every load. `launch.py` now
+  mounts a named volume, `sparkyard-vllm-cache`, there (`VLLM_CACHE_VOLUME`
+  renames it; empty disables it). Measured on Qwen3.8-27B-NVFP4 with its DSpark
+  drafter: time to first response 806 s → 397 s (autotune ~300 s → 31 s,
+  compile 50 s → under 1 s). Weight loading and CUDA graph capture are the rest.
+
 ### Fixed
 
 - **Claude Code runs died the first time the agent read an image it had

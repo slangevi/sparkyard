@@ -129,6 +129,38 @@ def test_build_argv_basic(monkeypatch):
                             "--kv-cache-dtype", "fp8"]
 
 
+# --- argv: vLLM's cache dir persists across --rm launches ---
+def _cache_env():
+    return launch.LaunchEnv(model_path="/m", model_host_path="/m", container_name="c",
+                            image="img", port="1", host="h", max_model_len=1, max_num_seqs=1,
+                            extra_docker_args="", pre_launch_cmd="", vllm_serve_prefix="vllm serve")
+
+
+def test_build_argv_mounts_vllm_cache_volume_by_default(monkeypatch):
+    # torch.compile artifacts and FlashInfer's autotune results live under
+    # /root/.cache/vllm; without a mount every cold load redoes ~7 min of work.
+    monkeypatch.setenv("LLM_ROOT_PATH", "/data/LLMs")
+    monkeypatch.delenv("VLLM_CACHE_VOLUME", raising=False)
+    argv = launch.build_argv("0.50", _cache_env(), [])
+    i = argv.index("sparkyard-vllm-cache:/root/.cache/vllm")
+    assert argv[i - 1] == "-v"
+    assert i < argv.index("img")
+
+
+def test_build_argv_vllm_cache_volume_override(monkeypatch):
+    monkeypatch.setenv("LLM_ROOT_PATH", "/data/LLMs")
+    monkeypatch.setenv("VLLM_CACHE_VOLUME", "other-cache")
+    argv = launch.build_argv("0.50", _cache_env(), [])
+    assert "other-cache:/root/.cache/vllm" in argv
+
+
+def test_build_argv_vllm_cache_volume_empty_disables(monkeypatch):
+    monkeypatch.setenv("LLM_ROOT_PATH", "/data/LLMs")
+    monkeypatch.setenv("VLLM_CACHE_VOLUME", "")
+    argv = launch.build_argv("0.50", _cache_env(), [])
+    assert not any(a.endswith(":/root/.cache/vllm") for a in argv)
+
+
 # --- argv: empty VLLM_SERVE_PREFIX drops the prefix ---
 def test_build_argv_empty_prefix(monkeypatch):
     monkeypatch.setenv("LLM_ROOT_PATH", "/data/LLMs")

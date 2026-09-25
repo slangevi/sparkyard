@@ -261,6 +261,15 @@ def build_argv(gmem_str, env, passthrough):
         "-e", "VLLM_MARLIN_USE_ATOMIC_ADD=1",
         "-v", f"{llm_root}:/models",
     ]
+    # vLLM keeps torch.compile artifacts and FlashInfer's GEMM autotune results
+    # under /root/.cache/vllm. The container is --rm, so without this mount every
+    # cold load redoes them (~7 min for an NVFP4 27B on the GB10). A named volume
+    # (created by docker on first use) keeps root-owned files out of the host tree.
+    # Entries are keyed by model/config hash, so one volume serves every model.
+    # VLLM_CACHE_VOLUME overrides the name; set it empty to disable the mount.
+    cache_vol = os.environ.get("VLLM_CACHE_VOLUME", "sparkyard-vllm-cache")
+    if cache_vol:
+        base += ["-v", f"{cache_vol}:/root/.cache/vllm"]
     extra = shlex.split(env.extra_docker_args) if env.extra_docker_args else []
     prefix = shlex.split(env.vllm_serve_prefix) if env.vllm_serve_prefix else []
     vllm_args = prefix + [

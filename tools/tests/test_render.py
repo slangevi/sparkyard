@@ -271,3 +271,15 @@ def test_litellm_request_timeout_outlasts_a_cold_model_load():
     models[0].raw["ready_timeout"] = 1800
     doc = yaml.safe_load(render_litellm(models))
     assert doc["litellm_settings"]["request_timeout"] > 1800
+
+
+def test_litellm_routes_anthropic_messages_through_chat_completions():
+    """Claude Code talks to the gateway over Anthropic /v1/messages. For openai/
+    deployments LiteLLM bridges that to the OpenAI Responses API by default, and
+    its adapter emits input_image items without the `detail` field vLLM's
+    Responses schema requires — so an agent that reads an image it generated
+    gets a 400. The chat/completions route handles tool-result images."""
+    from sparkyard.render import render_litellm
+    _settings, models, _groups = load(MODELS, SETTINGS)
+    doc = yaml.safe_load(render_litellm(models))
+    assert doc["litellm_settings"]["use_chat_completions_url_for_anthropic_messages"] is True

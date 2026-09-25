@@ -23,6 +23,13 @@ model_list:
 
 litellm_settings:
   drop_params: true
+  # Claude Code talks to the gateway over Anthropic /v1/messages. LiteLLM's
+  # default bridge for openai/ deployments is the OpenAI Responses API, whose
+  # adapter emits input_image items without the `detail` field that vLLM's
+  # Responses schema requires: an agent reading an image it generated got a 400.
+  # The chat/completions route hoists tool-result images into a user message
+  # and also surfaces reasoning as thinking blocks (2026-09-24).
+  use_chat_completions_url_for_anthropic_messages: true
   set_verbose: false
   request_timeout: {{ request_timeout }}
   merge_reasoning_content_in_choices: true

@@ -220,6 +220,42 @@ few things non-obvious:
   54 GiB without** — enough to cross the crash threshold mid-load on a model that
   otherwise fits comfortably. The cost scales with weight size, so the largest
   models are the most exposed. `sparkyard doctor` flags it.
+- **Where a vLLM cold load goes, and what shortens it.** Measured on
+  Qwen3.8-27B-NVFP4 with its DSpark drafter: weights ~150 s, torch.compile ~50 s,
+  profiling/warmup ~65 s, FlashInfer's fp4 GEMM autotune **~5 min**, CUDA graph
+  capture ~90 s — 13.4 min to first response. `launch.py` keeps vLLM's cache dir
+  in the `sparkyard-vllm-cache` volume, which takes compile and autotune to
+  seconds (~6.6 min). **Any change to a model's vLLM flags invalidates that cache
+  once**, so the next load pays the full time again.
+- **`max_num_seqs` sets CUDA graph capture time.** 89 s at 8, 47 s at 4, 29 s at 2
+  on the same model. Size it to what actually runs concurrently rather than
+  leaving headroom — but check the clients first: a batch job with N workers needs
+  at least N, or its throughput silently halves.
+- **Weight loading is CPU-bound, not I/O-bound.** The NVMe reads a 5 GB shard in
+  about 1 s; the default loader spends ~30 s on each. `--model-loader-extra-config
+  '{"enable_multithread_load":true,"num_threads":8}'` halves the per-shard read,
+  though post-processing keeps the whole phase at ~148 s (from ~171 s). Note that
+  `nproc` in a container with `OMP_NUM_THREADS=4` reports 4, not the box's 20 cores.
+- **Prefix caching on hybrid models (Qwen3.5/3.8 GDN) is coarse, and a DSpark
+  drafter makes it worse.** vLLM runs them in mamba cache mode `align`
+  (`--mamba-cache-mode all` is unsupported and silently falls back): linear-attention
+  state is saved only on attention-block boundaries (~1,600 tokens). With the DSpark
+  drafter on, a *new* prefix is reusable only from its third use — the first
+  follow-up to a 24k-token prompt gets 0 hits, even an identical repeat does —
+  while without the drafter it gets 99%. The drafter is still worth keeping: it
+  doubles decode (19.4 vs 9.7 tok/s), which outweighs one missed ~10 s prefill per
+  session. Shrinking `--max-num-batched-tokens` to a block multiple does not help
+  and doubles prefill time. Measure hits with vLLM's own `prefix_cache_hits_total`
+  (via llama-swap's `/upstream/<model>/metrics`); LiteLLM reports zero cache reads
+  either way.
+- **DSpark draft length barely matters.** `num_speculative_tokens` 7 vs 4 decoded at
+  19.1 vs 19.4 tok/s (mean acceptance ~2.5 either way): the drafter proposes all
+  positions in one pass, so extra draft tokens are close to free and rarely accepted.
+- **Check effort settings by prompt size, not by asking the model.** A template that
+  turns `reasoning_effort` into a system-prompt sentence changes the prompt's token
+  count (Qwen3.8, "Say ok.": `low` 43, `medium` 13, `high`/`xhigh` 55). Asking the
+  model to quote its effort line is unreliable — for `medium`, which adds no
+  sentence, it invents one.
 - **Don't hand-edit the generated `llama-swap/config.yaml`** — it's regenerated
   from `models.yaml` by `sparkyard render`. (The generator emits each launcher
   invocation as one folded `cmd:` line and is test-guarded against a YAML

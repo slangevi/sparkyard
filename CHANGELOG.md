@@ -9,6 +9,16 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Added
+
+- **`reclaim_containers` per model.** A co-tenant that caches models in unified
+  memory (an image/video server, say) can leave a vLLM model below its
+  `gmem.min` floor, and the load then fails with `upstream command exited
+  prematurely`. List such containers under `reclaim_containers:` and, only when
+  free memory is short, `launch.py` restarts the running ones, waits up to
+  `RECLAIM_WAIT_S` (90 s) for the memory to come back, and sizes again before
+  giving up. Names are validated at render time and again in the launcher.
+
 ### Changed
 
 - **vLLM cold loads keep their compile and autotune caches.** Model containers

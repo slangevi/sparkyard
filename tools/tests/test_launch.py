@@ -338,3 +338,83 @@ def test_parse_config_block_list_without_attention_falls_back_to_all_layers(tmp_
     d = _model_dir(tmp_path, cfg, 1)
     n_layers, _, _, _, n_attn = launch.parse_config(d)
     assert (n_layers, n_attn) == (8, 8)
+
+
+# --- reclaim: restart named containers when memory is short, then recompute ---
+_P = dict(max_model_len=4096, max_num_seqs=10, kv_dtype_bytes=1, gmin=0.55, gmax=0.92,
+          safety=4.0, cuda_overhead=6.3, ceiling=117.81, kv_batch_realistic=4,
+          free_buffer=5.0, weights=8.0)
+_SHORT = (124 * 1048576, 20 * 1048576, 20 * 1048576)
+_ROOMY = (124 * 1048576, 100 * 1048576, 100 * 1048576)
+
+
+def test_parse_reclaim_splits_on_spaces_and_commas():
+    assert launch.parse_reclaim("comfyui other-app,third") == ["comfyui", "other-app", "third"]
+    assert launch.parse_reclaim("") == []
+    assert launch.parse_reclaim(None) == []
+
+
+def test_parse_reclaim_refuses_non_container_names():
+    for bad in ("x;id", "-rm", "a/b", "$(id)"):
+        with pytest.raises(SystemExit):
+            launch.parse_reclaim(bad)
+
+
+class _Docker:
+    """Fake `docker` runner: records calls, reports which containers run."""
+    def __init__(self, running):
+        self.running, self.calls = set(running), []
+
+    def __call__(self, argv):
+        self.calls.append(argv)
+        if argv[:2] == ["docker", "inspect"]:
+            return "true" if argv[-1] in self.running else "false"
+        return ""
+
+
+def test_reclaim_restarts_only_running_listed_containers_then_recomputes():
+    docker = _Docker(running=["comfyui"])
+    reads = iter([_SHORT, _ROOMY])
+    gmem, mode, _ = launch.reclaim_and_recompute(
+        ["comfyui", "stopped-app"], (32, 32, 8, 128), launch.Params(**_P),
+        read=lambda: next(reads), run=docker, sleep=lambda s: None, wait_s=10)
+    assert mode != "ERR" and gmem is not None
+    restarts = [c for c in docker.calls if c[1] == "restart"]
+    assert restarts == [["docker", "restart", "comfyui"]]
+
+
+def test_reclaim_polls_until_memory_frees():
+    reads = iter([_SHORT, _SHORT, _SHORT, _ROOMY])
+    slept = []
+    gmem, mode, _ = launch.reclaim_and_recompute(
+        ["comfyui"], (32, 32, 8, 128), launch.Params(**_P),
+        read=lambda: next(reads), run=_Docker(["comfyui"]), sleep=slept.append, wait_s=10)
+    assert mode != "ERR" and len(slept) == 3
+
+
+def test_reclaim_gives_up_after_wait_and_reports_err():
+    gmem, mode, _ = launch.reclaim_and_recompute(
+        ["comfyui"], (32, 32, 8, 128), launch.Params(**_P),
+        read=lambda: _SHORT, run=_Docker(["comfyui"]), sleep=lambda s: None, wait_s=3)
+    assert mode == "ERR" and gmem is None
+
+
+def test_reclaim_with_nothing_running_does_not_wait():
+    slept = []
+    _, mode, _ = launch.reclaim_and_recompute(
+        ["comfyui"], (32, 32, 8, 128), launch.Params(**_P),
+        read=lambda: _SHORT, run=_Docker([]), sleep=slept.append, wait_s=30)
+    assert mode == "ERR" and slept == []
+
+
+def test_main_does_not_reclaim_when_memory_suffices(tmp_path, monkeypatch):
+    mdir = _model_dir(tmp_path, {"num_hidden_layers": 32, "num_attention_heads": 32,
+                                 "num_key_value_heads": 8, "head_dim": 128}, 1024)
+    for k, v in dict(MODEL_PATH=mdir, MODEL_HOST_PATH=mdir, CONTAINER_NAME="c", IMAGE="i",
+                     PORT="1", HOST="h", LLM_ROOT_PATH="/m", RECLAIM_CONTAINERS="comfyui",
+                     SPARKYARD_MEMINFO_PATH=_meminfo(tmp_path, 124 * 1048576,
+                                                     100 * 1048576, 100 * 1048576)).items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(launch, "reclaim_and_recompute",
+                        lambda *a, **k: pytest.fail("reclaimed with enough memory"))
+    launch.main(["--print"])

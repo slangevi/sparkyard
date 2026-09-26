@@ -51,6 +51,7 @@ models:
     ttl: 600
     ready_timeout: 600
     extra_docker_args: "-e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True -e OMP_NUM_THREADS=4"
+    reclaim_containers: [comfyui, other-app]
     chat_template: vllm/Alibaba/Qwen3.6-35B-A3B-FP8/chat_template-tool-strict.jinja
     aliases: [qwen3.6-35b-a3b]
     vllm_flags:

@@ -156,6 +156,12 @@ def validate(models, groups=None):
                     errors.append(f"{m.name}: --kv-cache-dtype {dtype} implies kv_dtype_bytes: 2 (got 1)")
         if m.engine == "llamacpp" and m.image is None:
             errors.append(f"{m.name}: llamacpp model needs an image")
+        rc = m.raw.get("reclaim_containers")
+        if rc is not None:
+            if not isinstance(rc, list) or not all(
+                    isinstance(n, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", n) for n in rc):
+                errors.append(f"{m.name}: reclaim_containers must be a list of container names "
+                              f"(got {rc!r})")
         for fld in ("extra_docker_args", "pre_launch_cmd"):
             val = m.raw.get(fld)
             if isinstance(val, str) and "'" in val:

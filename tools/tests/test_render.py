@@ -52,6 +52,13 @@ def test_vllm_advanced_has_overrides():
     assert "GMEM_OVERRIDE=0.7069" in out
     assert "EXTRA_DOCKER_ARGS='-e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True -e OMP_NUM_THREADS=4'" in out
     assert "--served-model-name Qwen3.6-35B-A3B-FP8 qwen3.6-35b-a3b" in out
+    assert "RECLAIM_CONTAINERS='comfyui other-app'" in out
+
+
+def test_reclaim_containers_omitted_when_unset():
+    out = _render()
+    nano = out.split("Nemotron-3-Nano-4B-FP8:", 1)[1].split("cmdStop:", 1)[0]
+    assert "RECLAIM_CONTAINERS" not in nano
 
 
 def test_llamacpp_block_rendered():

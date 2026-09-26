@@ -244,3 +244,10 @@ def test_group_flags_must_be_boolean():
                            "members": ["Nemotron-3-Nano-4B-FP8"]}}
     errors = validate(_models(), groups)
     assert any("persistent" in e for e in errors)
+
+
+def test_reclaim_containers_must_be_a_list_of_container_names():
+    assert not validate(load_models(_vllm(reclaim_containers=["comfyui", "my_app.2"])))
+    for bad in ("comfyui", ["ok", "bad name"], ["x;rm -rf /"], ["-flag"], [""], [3]):
+        errors = validate(load_models(_vllm(reclaim_containers=bad)))
+        assert any("reclaim_containers" in e for e in errors), bad

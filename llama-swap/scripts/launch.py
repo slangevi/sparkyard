@@ -18,14 +18,22 @@ Env contract (same names/defaults as the original):
             SYSTEM_RAM_CEILING_GIB=117.81 KV_BATCH_REALISTIC=4 GMEM_FREE_BUFFER_GIB=5
   optional: GMEM_OVERRIDE (number in (0,1) -> static; "adaptive"/unset -> compute)
             EXTRA_DOCKER_ARGS PRE_LAUNCH_CMD VLLM_SERVE_PREFIX(default "vllm serve")
+            RECLAIM_CONTAINERS (space/comma-separated container names) RECLAIM_WAIT_S=90
+              when free memory is below GMEM_MIN, restart those of them that are
+              running, wait for the memory to come back, and size again before
+              giving up. For co-tenants that cache models in unified memory and
+              do not hand it back on request.
   test-only: SPARKYARD_MEMINFO_PATH (override /proc/meminfo), SPARKYARD_LAUNCH_PRINT=1
 Pass `--print` (or SPARKYARD_LAUNCH_PRINT=1) to print gmem + docker argv and exit
 without launching. Remaining args are forwarded verbatim after the vllm flags.
 """
 import json
 import os
+import re
 import shlex
+import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
@@ -249,6 +257,47 @@ def compute_gmem(cfg_vals, params, meminfo):
     return g2(u), mode, diag
 
 
+_CONTAINER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def parse_reclaim(raw):
+    names = [n for n in re.split(r"[\s,]+", raw or "") if n]
+    for n in names:
+        if not _CONTAINER_NAME.match(n):
+            _fatal(f"[reclaim] FATAL: RECLAIM_CONTAINERS entry {n!r} is not a container name")
+    return names
+
+
+def _docker(argv):
+    r = subprocess.run(argv, capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def reclaim_and_recompute(names, cfg_vals, params, read=None, run=_docker,
+                          sleep=time.sleep, wait_s=90):
+    """Restart each listed container that is running, then poll meminfo once
+    a second (up to wait_s) until compute_gmem stops reporting ERR. Returns
+    compute_gmem's result from the last read."""
+    read = read or read_meminfo
+    restarted = []
+    for n in names:
+        if run(["docker", "inspect", "-f", "{{.State.Running}}", n]) == "true":
+            sys.stderr.write(f"[reclaim] free memory below GMEM_MIN: restarting {n}\n")
+            run(["docker", "restart", n])
+            restarted.append(n)
+    result = compute_gmem(cfg_vals, params, read())
+    if not restarted:
+        return result
+    waited = 0
+    while result[1] == "ERR" and waited < wait_s:
+        sleep(1)
+        waited += 1
+        result = compute_gmem(cfg_vals, params, read())
+    sys.stderr.write(f"[reclaim] after restarting {' '.join(restarted)}: "
+                     f"free={result[2]['free']:.2f}GiB ({'ok' if result[1] != 'ERR' else 'still short'})\n")
+    return result
+
+
 def build_argv(gmem_str, env, passthrough):
     llm_root = os.environ.get("LLM_ROOT_PATH")
     if not llm_root:
@@ -339,6 +388,10 @@ def main(argv=None):
         )
         cfg_vals = parse_config(env.model_host_path)
         gmem, mode, d = compute_gmem(cfg_vals, params, read_meminfo())
+        reclaim = parse_reclaim(os.environ.get("RECLAIM_CONTAINERS"))
+        if mode == "ERR" and reclaim:
+            gmem, mode, d = reclaim_and_recompute(
+                reclaim, cfg_vals, params, wait_s=_env_num("RECLAIM_WAIT_S", 90, int))
         if mode == "ERR":
             _fatal(f"[auto-gmem] FATAL: free VRAM below GMEM_MIN floor — "
                    f"cap={d['u_cap']:.2f} gmin={params.gmin:.2f} free={d['free']:.2f}")

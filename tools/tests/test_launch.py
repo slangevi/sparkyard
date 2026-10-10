@@ -418,3 +418,99 @@ def test_main_does_not_reclaim_when_memory_suffices(tmp_path, monkeypatch):
     monkeypatch.setattr(launch, "reclaim_and_recompute",
                         lambda *a, **k: pytest.fail("reclaimed with enough memory"))
     launch.main(["--print"])
+
+
+# --- reclaim margin: vLLM's real footprint exceeds gmem*total by ~10 GiB ---
+def test_short_when_err():
+    assert launch.short_of_memory(None, "ERR", {"free": 40.0, "total": 111.0}, margin=10)
+
+
+def test_not_short_when_free_covers_share_plus_margin():
+    assert not launch.short_of_memory(0.30, "sized", {"free": 50.0, "total": 111.0}, margin=10)  # 33.3+10 <= 50
+
+
+def test_short_when_free_misses_share_plus_margin():
+    assert launch.short_of_memory(0.34, "sized", {"free": 44.4, "total": 111.5}, margin=10)  # 37.9+10 > 44.4
+
+
+def test_margin_zero_keeps_the_old_err_only_rule():
+    assert not launch.short_of_memory(0.34, "sized", {"free": 44.4, "total": 111.5}, margin=0)
+
+
+# --- busy guard: never restart a co-tenant that is working ---
+def test_parse_cpu_percent():
+    assert launch.parse_cpu("100.67%") == 100.67
+    assert launch.parse_cpu("0.12%") == 0.12
+    assert launch.parse_cpu("") is None and launch.parse_cpu("garbage") is None
+
+
+class _BusyDocker(_Docker):
+    """Running containers report CPU from a per-name script of readings."""
+    def __init__(self, running, cpu):
+        super().__init__(running)
+        self.cpu = {k: list(v) for k, v in cpu.items()}
+
+    def __call__(self, argv):
+        if argv[:2] == ["docker", "stats"]:
+            self.calls.append(argv)
+            seq = self.cpu.get(argv[-1], ["0.1%"])
+            return seq.pop(0) if len(seq) > 1 else seq[0]
+        return super().__call__(argv)
+
+
+def _restarts(docker):
+    return [c[2] for c in docker.calls if c[:2] == ["docker", "restart"]]
+
+
+def test_idle_container_is_restarted_at_once():
+    docker = _BusyDocker(["comfyui"], {"comfyui": ["0.1%"]})
+    slept = []
+    launch.reclaim_and_recompute(["comfyui"], (32, 32, 8, 128), launch.Params(**_P),
+                                 read=lambda: _ROOMY, run=docker, sleep=slept.append,
+                                 wait_s=10, busy_cpu=20, busy_wait_s=300)
+    assert _restarts(docker) == ["comfyui"] and slept == []
+
+
+def test_busy_container_is_waited_for_then_restarted():
+    docker = _BusyDocker(["comfyui"], {"comfyui": ["100.7%", "100.9%", "0.2%"]})
+    slept = []
+    launch.reclaim_and_recompute(["comfyui"], (32, 32, 8, 128), launch.Params(**_P),
+                                 read=lambda: _ROOMY, run=docker, sleep=slept.append,
+                                 wait_s=10, busy_cpu=20, busy_wait_s=300)
+    assert _restarts(docker) == ["comfyui"] and sum(slept) == 10   # two 5 s polls
+
+
+def test_container_busy_for_the_whole_wait_is_left_alone():
+    docker = _BusyDocker(["comfyui"], {"comfyui": ["100.7%"]})
+    gmem, mode, _ = launch.reclaim_and_recompute(
+        ["comfyui"], (32, 32, 8, 128), launch.Params(**_P),
+        read=lambda: _SHORT, run=docker, sleep=lambda s: None,
+        wait_s=10, busy_cpu=20, busy_wait_s=30)
+    assert _restarts(docker) == [] and mode == "ERR"
+
+
+def test_unreadable_cpu_counts_as_idle():
+    docker = _BusyDocker(["comfyui"], {"comfyui": [""]})
+    launch.reclaim_and_recompute(["comfyui"], (32, 32, 8, 128), launch.Params(**_P),
+                                 read=lambda: _ROOMY, run=docker, sleep=lambda s: None,
+                                 wait_s=10, busy_cpu=20, busy_wait_s=300)
+    assert _restarts(docker) == ["comfyui"]
+
+
+def test_main_reclaims_on_margin_shortfall_even_without_err(tmp_path, monkeypatch):
+    mdir = _model_dir(tmp_path, {"num_hidden_layers": 32, "num_attention_heads": 32,
+                                 "num_key_value_heads": 8, "head_dim": 128}, 1024)
+    # 58 GiB available -> free 45.51 after headroom/overhead, so u_cap 0.36 passes
+    # the 0.34 floor (no ERR); but gmem 0.34 of 111.51 = 37.9, +10 margin = 47.9 > 45.51.
+    for k, v in dict(MODEL_PATH=mdir, MODEL_HOST_PATH=mdir, CONTAINER_NAME="c", IMAGE="i",
+                     PORT="1", HOST="h", LLM_ROOT_PATH="/m", RECLAIM_CONTAINERS="comfyui",
+                     GMEM_MIN="0.34", GMEM_MAX="0.34", SAFETY_GIB="1",
+                     SPARKYARD_MEMINFO_PATH=_meminfo(tmp_path, 124 * 1048576,
+                                                     58 * 1048576, 58 * 1048576)).items():
+        monkeypatch.setenv(k, v)
+    called = []
+    real = launch.compute_gmem
+    monkeypatch.setattr(launch, "reclaim_and_recompute",
+                        lambda names, cfg, params, **kw: (called.append(names) or real(cfg, params, launch.read_meminfo())))
+    launch.main(["--print"])
+    assert called == [["comfyui"]]

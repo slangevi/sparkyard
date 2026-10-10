@@ -19,10 +19,15 @@ Env contract (same names/defaults as the original):
   optional: GMEM_OVERRIDE (number in (0,1) -> static; "adaptive"/unset -> compute)
             EXTRA_DOCKER_ARGS PRE_LAUNCH_CMD VLLM_SERVE_PREFIX(default "vllm serve")
             RECLAIM_CONTAINERS (space/comma-separated container names) RECLAIM_WAIT_S=90
-              when free memory is below GMEM_MIN, restart those of them that are
-              running, wait for the memory to come back, and size again before
-              giving up. For co-tenants that cache models in unified memory and
-              do not hand it back on request.
+              RECLAIM_MARGIN_GIB=10 RECLAIM_BUSY_CPU=20 RECLAIM_BUSY_WAIT_S=300
+              when free memory is short — below GMEM_MIN, or below this model's
+              share plus RECLAIM_MARGIN_GIB (vLLM's real footprint exceeds
+              gmem*total by about that much) — restart those of them that are
+              running and idle, wait for the memory to come back, and size again.
+              A container above RECLAIM_BUSY_CPU percent is waited for (up to
+              RECLAIM_BUSY_WAIT_S) and left alone if it stays busy, so a job in
+              flight is never killed. For co-tenants that cache models in unified
+              memory and do not hand it back on request.
   test-only: SPARKYARD_MEMINFO_PATH (override /proc/meminfo), SPARKYARD_LAUNCH_PRINT=1
 Pass `--print` (or SPARKYARD_LAUNCH_PRINT=1) to print gmem + docker argv and exit
 without launching. Remaining args are forwarded verbatim after the vllm flags.
@@ -273,18 +278,52 @@ def _docker(argv):
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+def short_of_memory(gmem, mode, diag, margin):
+    """Short if sizing failed outright, or if free memory does not cover this
+    model's share plus `margin` GiB of the overhead vLLM uses beyond it."""
+    if mode == "ERR" or gmem is None:
+        return True
+    return diag["free"] < gmem * diag["total"] + margin
+
+
+def parse_cpu(text):
+    m = re.fullmatch(r"\s*([0-9]+(?:\.[0-9]+)?)%\s*", text or "")
+    return float(m.group(1)) if m else None
+
+
+def _wait_until_idle(name, run, sleep, busy_cpu, busy_wait_s, poll=5):
+    """True once `name` is at or below busy_cpu percent CPU (or its CPU cannot
+    be read); False if it stays busy for busy_wait_s seconds."""
+    waited = 0
+    while True:
+        cpu = parse_cpu(run(["docker", "stats", "--no-stream", "--format", "{{.CPUPerc}}", name]))
+        if cpu is None or cpu <= busy_cpu:
+            return True
+        if waited >= busy_wait_s:
+            return False
+        if waited == 0:
+            sys.stderr.write(f"[reclaim] {name} is busy ({cpu:.0f}% CPU): waiting up to {busy_wait_s}s\n")
+        sleep(poll)
+        waited += poll
+
+
 def reclaim_and_recompute(names, cfg_vals, params, read=None, run=_docker,
-                          sleep=time.sleep, wait_s=90):
-    """Restart each listed container that is running, then poll meminfo once
-    a second (up to wait_s) until compute_gmem stops reporting ERR. Returns
-    compute_gmem's result from the last read."""
+                          sleep=time.sleep, wait_s=90, busy_cpu=20.0, busy_wait_s=300):
+    """Restart each listed container that is running and idle (a busy one is
+    waited for, then left alone), then poll meminfo once a second (up to
+    wait_s) until compute_gmem stops reporting ERR. Returns compute_gmem's
+    result from the last read."""
     read = read or read_meminfo
     restarted = []
     for n in names:
-        if run(["docker", "inspect", "-f", "{{.State.Running}}", n]) == "true":
-            sys.stderr.write(f"[reclaim] free memory below GMEM_MIN: restarting {n}\n")
-            run(["docker", "restart", n])
-            restarted.append(n)
+        if run(["docker", "inspect", "-f", "{{.State.Running}}", n]) != "true":
+            continue
+        if not _wait_until_idle(n, run, sleep, busy_cpu, busy_wait_s):
+            sys.stderr.write(f"[reclaim] {n} stayed busy; not restarting it\n")
+            continue
+        sys.stderr.write(f"[reclaim] free memory short: restarting {n}\n")
+        run(["docker", "restart", n])
+        restarted.append(n)
     result = compute_gmem(cfg_vals, params, read())
     if not restarted:
         return result
@@ -296,7 +335,6 @@ def reclaim_and_recompute(names, cfg_vals, params, read=None, run=_docker,
     sys.stderr.write(f"[reclaim] after restarting {' '.join(restarted)}: "
                      f"free={result[2]['free']:.2f}GiB ({'ok' if result[1] != 'ERR' else 'still short'})\n")
     return result
-
 
 def build_argv(gmem_str, env, passthrough):
     llm_root = os.environ.get("LLM_ROOT_PATH")
@@ -389,9 +427,15 @@ def main(argv=None):
         cfg_vals = parse_config(env.model_host_path)
         gmem, mode, d = compute_gmem(cfg_vals, params, read_meminfo())
         reclaim = parse_reclaim(os.environ.get("RECLAIM_CONTAINERS"))
-        if mode == "ERR" and reclaim:
+        margin = _env_num("RECLAIM_MARGIN_GIB", 10.0, float)
+        if reclaim and short_of_memory(gmem, mode, d, margin):
             gmem, mode, d = reclaim_and_recompute(
-                reclaim, cfg_vals, params, wait_s=_env_num("RECLAIM_WAIT_S", 90, int))
+                reclaim, cfg_vals, params, wait_s=_env_num("RECLAIM_WAIT_S", 90, int),
+                busy_cpu=_env_num("RECLAIM_BUSY_CPU", 20.0, float),
+                busy_wait_s=_env_num("RECLAIM_BUSY_WAIT_S", 300, int))
+            if mode != "ERR" and short_of_memory(gmem, mode, d, margin):
+                sys.stderr.write(f"[reclaim] WARNING: still under the {margin:.0f} GiB margin "
+                                 f"(free={d['free']:.2f}GiB); launching anyway\n")
         if mode == "ERR":
             _fatal(f"[auto-gmem] FATAL: free VRAM below GMEM_MIN floor — "
                    f"cap={d['u_cap']:.2f} gmin={params.gmin:.2f} free={d['free']:.2f}")

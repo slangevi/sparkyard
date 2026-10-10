@@ -36,6 +36,9 @@ models:
 {%- if m.pre_launch_cmd %}
       PRE_LAUNCH_CMD='{{ m.pre_launch_cmd }}'
 {%- endif %}
+{%- if m.reclaim_containers %}
+      RECLAIM_CONTAINERS='{{ m.reclaim_containers | join(' ') }}'
+{%- endif %}
       python3 /app/scripts/launch.py
       --served-model-name {{ m.served_names | join(' ') }}
 {%- if m.chat_template %}

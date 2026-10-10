@@ -113,6 +113,10 @@ class Model:
         return self.raw.get("pre_launch_cmd")
 
     @property
+    def reclaim_containers(self):
+        return self.raw.get("reclaim_containers") or []
+
+    @property
     def chat_template(self):
         return self.raw.get("chat_template")
 

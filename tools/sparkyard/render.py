@@ -51,7 +51,7 @@ def load(models_path, settings_path):
     except KeyError as e:
         raise RenderError(f"models.yaml problem (missing key or unknown placeholder): {e}")
     groups = raw.get("groups") or {}
-    errors = validate(models, groups)
+    errors = validate(models, groups, settings.cluster)
     if errors:
         raise RenderError("invalid models.yaml:\n  - " + "\n  - ".join(errors))
     return settings, models, groups
@@ -70,9 +70,9 @@ def ready_ceiling(models):
     return max([m.ready_timeout for m in models], default=HEALTH_CHECK_FLOOR)
 
 
-def render_llama_swap(models, groups=None):
+def render_llama_swap(models, groups=None, cluster=None):
     return _env().get_template("llama-swap.config.yaml.j2").render(
-        models=models, groups=groups or {},
+        models=models, groups=groups or {}, cluster=cluster,
         health_check_timeout=max(ready_ceiling(models), HEALTH_CHECK_FLOOR))
 
 
@@ -101,6 +101,6 @@ def atomic_write(path, content):
 
 def render_all(settings, models, ls_out, ll_out, env_out, groups=None):
     """Render + atomically write all three live config files from loaded objects."""
-    atomic_write(ls_out, render_llama_swap(models, groups))
+    atomic_write(ls_out, render_llama_swap(models, groups, settings.cluster))
     atomic_write(ll_out, render_litellm(models))
     atomic_write(env_out, render_compose_env(settings))

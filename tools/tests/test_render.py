@@ -328,3 +328,44 @@ def test_litellm_explicit_allowed_openai_params_wins():
     assert _litellm_params(models, "Qwen3.6-35B-A3B-FP8")["allowed_openai_params"] == ["reasoning_effort", "top_k"]
     block = out.split("model_name: Qwen3.6-35B-A3B-FP8")[1].split("model_name:")[0]
     assert block.count("allowed_openai_params") == 1
+
+
+CLUSTER_MODELS = os.path.join(FIXTURES, "models.cluster.yaml")
+CLUSTER_SETTINGS = os.path.join(FIXTURES, "settings.cluster.yaml")
+
+
+def _render_cluster():
+    settings, models, groups = load(CLUSTER_MODELS, CLUSTER_SETTINGS)
+    return render_llama_swap(models, groups, settings.cluster)
+
+
+def test_cluster_block_matches_golden():
+    out = _render_cluster()
+    block = "  Big-TP2:" + out.split("Big-TP2:", 1)[1]
+    head, rest = block.split("cmdStop:", 1)
+    block = head + "cmdStop:" + rest.split("\n", 1)[0]
+    with open(os.path.join(FIXTURES, "expected", "llama-swap.vllm-cluster.yaml")) as f:
+        expected = f.read().rstrip("\n")
+    assert block == expected
+
+
+def test_cluster_cmd_has_no_blank_lines():
+    in_cmd = False
+    cmd_indent = 0
+    for line in _render_cluster().splitlines():
+        if re.match(r"\s*cmd: >\s*$", line):
+            in_cmd = True
+            cmd_indent = len(line) - len(line.lstrip())
+            continue
+        if in_cmd:
+            if line.strip() and (len(line) - len(line.lstrip())) <= cmd_indent:
+                in_cmd = False
+            elif not line.strip():
+                raise AssertionError("blank line inside a cmd: > block")
+    assert "NODES=2" in _render_cluster()
+
+
+def test_single_node_has_no_proxy_or_nodes():
+    out = _render()
+    assert "proxy:" not in out
+    assert "NODES=" not in out

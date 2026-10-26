@@ -1,0 +1,18 @@
+  Big-TP2:
+    ttl: 3600
+    checkEndpoint: "/health"
+    proxy: "http://host.docker.internal:${PORT}"
+    cmd: >
+      env
+      MODEL_PATH=/models/vllm/Org/Big
+      MODEL_HOST_PATH=/models/vllm/Org/Big
+      CONTAINER_NAME=big-${PORT}
+      IMAGE=vllm-node:latest
+      PORT=${PORT} HOST=${host}
+      MAX_MODEL_LEN=32768 MAX_NUM_SEQS=4 KV_DTYPE_BYTES=1
+      GMEM_MIN=0.12 GMEM_MAX=0.85 SAFETY_GIB=6
+      NODES=2 WORKER_SSH_HOST=10.0.0.2 WORKER_SSH_USER=acme WORKER_CX7_IP=192.168.100.11 HEAD_CX7_IP=192.168.100.10 MASTER_PORT=29501 ETH_IF=enp1s0f0np0 IB_HCA=rocep1s0f0,roceP2p1s0f0
+      python3 /app/scripts/launch.py
+      --served-model-name Big-TP2
+      --trust-remote-code
+    cmdStop: "env CONTAINER_NAME=big-${PORT} NODES=2 WORKER_SSH_HOST=10.0.0.2 WORKER_SSH_USER=acme WORKER_CX7_IP=192.168.100.11 HEAD_CX7_IP=192.168.100.10 MASTER_PORT=29501 ETH_IF=enp1s0f0np0 IB_HCA=rocep1s0f0,roceP2p1s0f0 python3 /app/scripts/launch.py --stop ${PID}"

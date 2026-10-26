@@ -11,6 +11,21 @@ the prior work that inspired it.
 
 ### Added
 
+- **Two-node tensor-parallel vLLM over ConnectX-7.** A model with `nodes: 2`
+  runs TP=2 across this node and one worker: rank 0 here, rank 1 started over
+  ssh by `launch.py`, both sized to the smaller of the two nodes' gmem plans.
+  A new optional `cluster:` block in `settings.local.yaml` describes the link
+  and the worker; validation is fail-closed (one worker, valid IPs, vLLM only,
+  no reserved parallelism flags, no two `nodes: 2` models resident together).
+  The head runs with host networking but binds its API to the Docker
+  host-gateway address, never `0.0.0.0`.
+- **`sparkyard cluster setup-key | check | sync`.** `setup-key` creates a
+  dedicated ssh key and pins the worker's host keys; `check` reports PASS/FAIL
+  for ssh, worker Docker + NVIDIA runtime, image layers, CX7 interface and HCAs,
+  link ping and weights; `sync` streams the image and rsyncs weights to the
+  worker. The llama-swap image now includes ssh and rsync. See the README's
+  "Two-node (CX7) cluster" section.
+
 - **`reclaim_containers` per model.** A co-tenant that caches models in unified
   memory (an image/video server, say) can leave a vLLM model below its
   `gmem.min` floor, and the load then fails with `upstream command exited

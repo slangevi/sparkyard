@@ -5,7 +5,7 @@ from sparkyard import cli
 
 ALL_COMMANDS = [
     "init", "secrets", "render", "validate", "doctor", "build",
-    "start", "stop", "add-model", "download", "vllm-node", "update", "bench",
+    "start", "stop", "add-model", "download", "vllm-node", "update", "bench", "cluster",
 ]
 
 

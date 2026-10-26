@@ -1,0 +1,9 @@
+llm_root: /data/LLMs
+repo_path: /repo
+home: /home/acme
+cluster:
+  head_cx7_ip: 192.168.100.10
+  eth_if: enp1s0f0np0
+  ib_hca: rocep1s0f0,roceP2p1s0f0
+  workers:
+    - {name: spark-2, ssh_host: 10.0.0.2, ssh_user: acme, cx7_ip: 192.168.100.11}

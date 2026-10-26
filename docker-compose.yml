@@ -102,6 +102,8 @@ services:
     image: sparkyard/llama-swap-spark:latest
     container_name: llama-swap
     restart: unless-stopped
+    # Cluster (nodes: 2) heads bind to the host gateway; llama-swap proxies there.
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports:
       - "127.0.0.1:28080:8080"  # Host 28080 → container 8080 (avoid conflict with other services)
     entrypoint: ["/usr/bin/llama-swap", "-config", "/app/config.yaml", "-listen", "0.0.0.0:8080"]

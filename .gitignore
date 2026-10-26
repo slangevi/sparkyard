@@ -3,6 +3,7 @@
 .env~
 LiteLLM/config.yaml
 llama-swap/config.yaml
+/llama-swap/cluster/
 # Sparkyard: single secrets home + machine settings (never committed)
 # Anchored to repo root so identically-named test fixtures aren't ignored.
 /secrets.env

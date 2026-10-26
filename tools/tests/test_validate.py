@@ -251,3 +251,184 @@ def test_reclaim_containers_must_be_a_list_of_container_names():
     for bad in ("comfyui", ["ok", "bad name"], ["x;rm -rf /"], ["-flag"], [""], [3]):
         errors = validate(load_models(_vllm(reclaim_containers=bad)))
         assert any("reclaim_containers" in e for e in errors), bad
+
+
+# --- nodes / cluster ---
+import pytest
+from sparkyard.settings import Cluster, ClusterWorker
+from sparkyard.validate import validate_cluster
+
+
+def _cluster(**over):
+    kw = dict(head_cx7_ip="10.0.0.1", eth_if="enp1s0f0np0", ib_hca="rocep1s0f0",
+              workers=[ClusterWorker("w", "spark-2", "scott", "10.0.0.2")], master_port=29501)
+    kw.update(over)
+    return Cluster(**kw)
+
+
+def _two_models(**over):
+    a = _vllm(**over)["models"][0]
+    b = dict(a, name="V2", container="v2")
+    return load_models({"defaults": {}, "models": [a, b]})
+
+
+@pytest.mark.parametrize("val", [3, True, "2"])
+def test_nodes_must_be_1_or_2(val):
+    errors = validate(load_models(_vllm(nodes=val)), cluster=_cluster())
+    assert any("nodes must be 1 or 2" in e for e in errors)
+
+
+def test_nodes_requires_cluster():
+    errors = validate(load_models(_vllm(nodes=2)))
+    assert any("nodes: 2 needs a cluster: block in settings.local.yaml" in e for e in errors)
+
+
+def test_nodes_llamacpp_rejected():
+    raw = {"defaults": {}, "models": [{"name": "L", "engine": "llamacpp", "container": "l",
+           "gguf": "g", "mount": "m", "ctx_size": 1, "image": "i", "nodes": 2}]}
+    errors = validate(load_models(raw), cluster=_cluster())
+    assert any("nodes > 1 is only supported for engine vllm" in e for e in errors)
+
+
+@pytest.mark.parametrize("flag", ["--tensor-parallel-size 2", "--tensor-parallel-size=2",
+                                  "-tp 2", "--headless", "--distributed-executor-backend ray",
+                                  "--master-port=1"])
+def test_cluster_reserved_flags_rejected(flag):
+    errors = validate(load_models(_vllm(nodes=2, vllm_flags=[flag])), cluster=_cluster())
+    assert any("is set by the cluster launcher" in e for e in errors)
+
+
+def test_single_node_tp_flag_still_allowed():
+    errors = validate(load_models(_vllm(vllm_flags=["--tensor-parallel-size 1"])))
+    assert errors == []
+
+
+def test_valid_two_node_model_has_no_errors():
+    assert validate(load_models(_vllm(nodes=2)), cluster=_cluster()) == []
+
+
+def test_two_cluster_models_in_coloading_group_rejected():
+    groups = {"g": {"swap": False, "members": ["V", "V2"]}}
+    errors = validate(_two_models(nodes=2), groups, _cluster())
+    assert any("cannot be loaded together" in e for e in errors)
+
+
+@pytest.mark.parametrize("g", [{"members": ["V", "V2"]}, {"swap": True, "members": ["V", "V2"]}])
+def test_two_cluster_models_in_swap_group_ok(g):
+    errors = validate(_two_models(nodes=2), {"g": g}, _cluster())
+    assert not any("cannot be loaded together" in e for e in errors)
+
+
+@pytest.mark.parametrize("workers", [[], [ClusterWorker("a", "h", "u", "10.0.0.2"),
+                                          ClusterWorker("b", "h2", "u", "10.0.0.3")]])
+def test_validate_cluster_one_worker(workers):
+    assert any("exactly one worker" in e for e in validate_cluster(_cluster(workers=workers)))
+
+
+def test_validate_cluster_ip_and_port():
+    bad = _cluster(workers=[ClusterWorker("w", "h", "u", "not-an-ip")])
+    assert any("cx7_ip" in e for e in validate_cluster(bad))
+    assert any("master_port" in e for e in validate_cluster(_cluster(master_port=0)))
+    assert validate_cluster(_cluster()) == []
+
+
+def test_two_cluster_models_in_separate_nonexclusive_groups_rejected():
+    groups = {"a": {"exclusive": False, "members": ["V"]},
+              "b": {"exclusive": False, "members": ["V2"]}}
+    errors = validate(_two_models(nodes=2), groups, _cluster())
+    assert any("cannot be loaded together" in e for e in errors)
+
+
+def test_cluster_models_nonexclusive_plus_default_group_rejected():
+    # A non-exclusive group does not unload the (exclusive) default group, so
+    # V (in 'a') and V2 (in the default group 'b') can be resident together.
+    groups = {"a": {"exclusive": False, "members": ["V"]}, "b": {"members": ["V2"]}}
+    errors = validate(_two_models(nodes=2), groups, _cluster())
+    assert any("cannot be loaded together" in e for e in errors)
+
+
+def test_cluster_model_nonexclusive_plus_ungrouped_rejected():
+    groups = {"a": {"exclusive": False, "members": ["V"]}}
+    errors = validate(_two_models(nodes=2), groups, _cluster())
+    assert any("cannot be loaded together" in e and "V2" in e for e in errors)
+
+
+def test_cluster_models_persistent_plus_default_group_rejected():
+    # A persistent group is never unloaded, so a second nodes: 2 model loaded
+    # anywhere else co-resides with it.
+    groups = {"p": {"persistent": True, "members": ["V"]}}
+    errors = validate(_two_models(nodes=2), groups, _cluster())
+    assert any("cannot be loaded together" in e for e in errors)
+
+
+def test_cluster_models_both_in_nonexclusive_swapping_group_ok():
+    groups = {"a": {"exclusive": False, "members": ["V", "V2"]}}
+    errors = validate(_two_models(nodes=2), groups, _cluster())
+    assert not any("cannot be loaded together" in e for e in errors)
+
+
+def test_cluster_models_both_in_nonexclusive_nonswapping_group_rejected():
+    groups = {"a": {"exclusive": False, "swap": False, "members": ["V", "V2"]}}
+    errors = validate(_two_models(nodes=2), groups, _cluster())
+    assert any("cannot be loaded together" in e for e in errors)
+
+
+def test_single_cluster_model_in_persistent_group_with_single_node_members_ok():
+    a = _vllm(nodes=2)["models"][0]
+    b = dict(a, name="Small", container="small")
+    b.pop("nodes")
+    models = load_models({"defaults": {}, "models": [a, b]})
+    groups = {"resident": {"swap": False, "exclusive": False, "persistent": True,
+                           "members": ["V", "Small"]}}
+    assert validate(models, groups, _cluster()) == []
+
+
+def test_cluster_model_listed_twice_not_coload():
+    groups = {"g": {"swap": False, "members": ["V", "V"]}}
+    errors = validate(_two_models(nodes=2), groups, _cluster())
+    assert not any("cannot be loaded together" in e for e in errors)
+
+
+@pytest.mark.parametrize("fld,val", [("eth_if", ""), ("eth_if", "  "), ("ib_hca", ""),
+                                     ("eth_if", None)])
+def test_validate_cluster_fields_nonempty(fld, val):
+    assert any(f"cluster: {fld} must be a non-empty string" in e
+               for e in validate_cluster(_cluster(**{fld: val})))
+
+
+@pytest.mark.parametrize("fld", ["ssh_host", "ssh_user"])
+@pytest.mark.parametrize("val", ["", "   ", None])
+def test_validate_cluster_worker_fields_nonempty(fld, val):
+    kw = dict(name="w", ssh_host="spark-2", ssh_user="scott", cx7_ip="10.0.0.2")
+    kw[fld] = val
+    errors = validate_cluster(_cluster(workers=[ClusterWorker(**kw)]))
+    assert any(f"cluster: worker {fld} must be a non-empty string" in e for e in errors)
+
+
+@pytest.mark.parametrize("val", ["enp1s0 f0", "enp'1", 'e"0', "-oProxyCommand=x", "e0;rm", "e0\n"])
+def test_validate_cluster_eth_if_charset(val):
+    assert any("cluster: eth_if" in e and "invalid" in e
+               for e in validate_cluster(_cluster(eth_if=val)))
+
+
+@pytest.mark.parametrize("val", ["rocep1s0f0, roceP2p1s0f0", "rocep1s0f0,", "-x", "a,'b"])
+def test_validate_cluster_ib_hca_charset(val):
+    assert any("cluster: ib_hca" in e and "invalid" in e
+               for e in validate_cluster(_cluster(ib_hca=val)))
+
+
+@pytest.mark.parametrize("fld", ["ssh_host", "ssh_user"])
+@pytest.mark.parametrize("val", ["-oProxyCommand=touch", "spark 2", "a'b", 'a"b', "a`b`"])
+def test_validate_cluster_worker_charset(fld, val):
+    kw = dict(name="w", ssh_host="spark-2", ssh_user="scott", cx7_ip="10.0.0.2")
+    kw[fld] = val
+    errors = validate_cluster(_cluster(workers=[ClusterWorker(**kw)]))
+    assert any(f"cluster: worker {fld}" in e and "invalid" in e for e in errors)
+
+
+def test_validate_cluster_charset_accepts_real_values():
+    c = _cluster(eth_if="enP2p1s0f0np0", ib_hca="rocep1s0f0,roceP2p1s0f0",
+                 workers=[ClusterWorker("w", "spark-2.lan", "scott_x", "10.0.0.2")])
+    assert validate_cluster(c) == []
+    c = _cluster(workers=[ClusterWorker("w", "fe80::1", "a.b-c", "10.0.0.2")])
+    assert validate_cluster(c) == []

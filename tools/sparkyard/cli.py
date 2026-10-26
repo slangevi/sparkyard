@@ -387,6 +387,70 @@ def bench(obj, mode, base_url, model):
     return _dispatch(_ns(obj, "bench", mode=mode, base_url=base_url, model=model))
 
 
+def _cluster_load(obj):
+    """Shared by the cluster subcommands: (settings, models, rc). rc is None on
+    success, else the exit code after printing the error."""
+    ns = _ns(obj, "cluster")
+    err = _resolve_paths(ns)
+    if err:
+        print(f"✗ {err}", file=sys.stderr)
+        return None, None, 2
+    try:
+        settings, models, _ = load(ns.models, ns.settings)
+    except RenderError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return None, None, 1
+    return settings, models, None
+
+
+@cli.group(cls=OrderedGroup)
+def cluster():
+    """Two-node (tensor-parallel) cluster: ssh key, preflight checks, sync."""
+
+
+@cluster.command("setup-key")
+@click.pass_obj
+def cluster_setup_key(obj):
+    """Create the dedicated ssh key + pin the worker's host keys."""
+    from . import cluster as cl
+    settings, _, rc = _cluster_load(obj)
+    if rc is not None:
+        return rc
+    if settings.cluster is None:
+        print("✗ no cluster: block in settings.local.yaml", file=sys.stderr)
+        return 1
+    return cl.setup_key(settings)
+
+
+@cluster.command("check")
+@click.pass_obj
+def cluster_check(obj):
+    """Verify ssh, docker, image, CX7 link and weights on both nodes."""
+    from . import cluster as cl
+    settings, models, rc = _cluster_load(obj)
+    if rc is not None:
+        return rc
+    if settings.cluster is None:
+        print(cl.suggest())
+        return 1
+    return cl.check(settings, models)
+
+
+@cluster.command("sync")
+@click.argument("names", metavar="[MODEL...]", nargs=-1)
+@click.pass_obj
+def cluster_sync(obj, names):
+    """Copy the image and weights of nodes: 2 models to the worker."""
+    from . import cluster as cl
+    settings, models, rc = _cluster_load(obj)
+    if rc is not None:
+        return rc
+    if settings.cluster is None:
+        print("✗ no cluster: block in settings.local.yaml", file=sys.stderr)
+        return 1
+    return cl.sync(settings, models, list(names))
+
+
 def main(argv=None):
     """Run the Click group and translate its outcome to the argparse-era exit
     codes (0 ok / 1 app error / 2 usage|no-checkout). Preserved so the console

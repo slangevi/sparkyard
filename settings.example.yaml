@@ -12,3 +12,14 @@ repo_path: /home/user/sparkyard  # absolute path to this repo clone
 #   upstream: https://github.com/eugr/spark-vllm-docker
 #   clone_path: "{repo_path}/vllm/build/spark-vllm-docker"   # gitignored
 #   vllm_ref: 7852e50e4
+
+# Optional — two-node tensor-parallel vLLM across two DGX Sparks (one worker).
+# Requires a direct CX7 link between the nodes. Uncomment to enable; the
+# cluster SSH key lives in {repo_path}/llama-swap/cluster/ (gitignored).
+# cluster:
+#   head_cx7_ip: 192.168.100.10          # this node's CX7 address (head)
+#   eth_if: enp1s0f0np0                  # NCCL/Gloo/UCX socket interface
+#   ib_hca: rocep1s0f0,roceP2p1s0f0      # RoCE HCAs for NCCL
+#   master_port: 29501                   # optional; default shown
+#   workers:
+#     - {name: spark-2, ssh_host: 192.168.1.51, ssh_user: ubuntu, cx7_ip: 192.168.100.11}

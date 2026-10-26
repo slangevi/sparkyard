@@ -87,6 +87,7 @@ curl http://localhost:14000/v1/chat/completions \
 | `sparkyard download [--model <name>]` | Fetch HF weights for `models.yaml` entries that carry `hf_repo`. |
 | `sparkyard update [COMPONENT]... [--check] [--notes]` | Check for + apply upstream component updates (`--check` = dry-run; `--notes` summarizes release/commit notes — llama-swap, litellm, open-webui, vllm-node — via your local gateway, each with an Apply/Review-first recommendation). Name one or more components (`ollama litellm litellm-db open-webui llama-swap llama-cpp vllm-node`) to scope the run; no names = all. |
 | `sparkyard bench [--mode speed]` | Benchmark each served model — quality (tool-eval-bench) or speed (llama-benchy). Scope it with `MODELS="a b"`; unscoped it loads **every** model on disk in turn, which on unified memory is a real memory event, not just a slow one. Unknown names exit 2. |
+| `sparkyard cluster setup-key` / `check` / `sync [MODEL...]` | Two-node cluster: create the ssh key + pin worker host keys / preflight both nodes (exit 1 on any FAIL) / copy the image and weights of `nodes: 2` models to the worker. See [Two-node cluster](#two-node-cx7-cluster). |
 
 **`make` aliases:** every command above also works as `make <cmd>` (e.g. `make
 render`, `make start`) for muscle memory. `make venv` (bootstrap the project venv
@@ -183,6 +184,128 @@ vLLM ones. Assumes repos keep `.gguf` files at the repo root (the common layout)
 quants nested in subdirectories need manual placement.
 
 Note: `sparkyard add-model` places GGUF weights under `{llm_root}/gguf/<org>/<model>/`; the shipped `models.example.yaml` entry instead reuses the shared `{llm_root}/ollama/` tree, so hand-added and auto-added GGUFs may live in different directories.
+
+## Two-node (CX7) cluster
+
+A `nodes: 2` vLLM model runs tensor-parallel (TP=2) across two DGX Sparks linked
+by ConnectX-7: rank 0 on this node (the head), rank 1 on one worker, started
+over ssh by `launch.py`. One worker is supported. The worker needs no sparkyard
+checkout.
+
+**Worker prerequisites** (once, on the worker):
+
+1. DGX OS, with the same interface names as the head.
+2. CX7 netplan with an address on **both** PCIe halves, on separate subnets,
+   MTU 9000. `/etc/netplan/40-cx7.yaml` (apply with `sudo netplan apply`):
+
+   ```yaml
+   # head                                  # worker: same, with .11
+   network:
+     version: 2
+     ethernets:
+       enp1s0f0np0:
+         addresses: [192.168.100.10/24]
+         mtu: 9000
+       enP2p1s0f0np0:
+         addresses: [192.168.101.10/24]
+         mtu: 9000
+   ```
+3. The ssh user in the `docker` group: `sudo usermod -aG docker <user>`, then
+   log in again.
+4. The NVIDIA container runtime configured in Docker — a fresh install can have
+   the toolkit without it: `sudo nvidia-ctk runtime configure --runtime=docker
+   --set-as-default && sudo systemctl restart docker`.
+5. Weights at the same absolute `llm_root` path (`cluster sync` copies them;
+   it needs `rsync` on the worker).
+
+Then, on the head:
+
+```bash
+sparkyard build                      # llama-swap image now carries ssh + rsync
+# add a cluster: block to settings.local.yaml (template in settings.example.yaml)
+sparkyard cluster setup-key          # makes the key, pins host keys, prints the ssh-copy-id
+# run the command setup-key printed, once; its shape is:
+ssh-copy-id -i <repo_path>/llama-swap/cluster/id_ed25519.pub <ssh_user>@<ssh_host>
+curl -s localhost:28080/unload       # unload any loaded model first
+sparkyard render && sparkyard start  # recreates llama-swap with the new image + extra_hosts
+# add a `nodes: 2` model to models.yaml (see models.example.yaml), then:
+sparkyard cluster sync <model>       # streams the image + rsyncs weights to the worker
+sparkyard cluster check              # every line must be PASS
+```
+
+Use `start`, not `reload`, after the image change: `reload` only restarts
+llama-swap and litellm and keeps the old image. Gotcha: recreating llama-swap
+with a model loaded orphans that model's `<container>-<port>` container (it still
+holds memory), so `docker stop` any such container listed by `docker ps`.
+
+`setup-key` fails unless the worker answers ssh-keyscan at both `ssh_host` and
+`cx7_ip` (both are pinned; `launch.py` uses the first, `sync` the second).
+`cluster check` verifies ssh to both addresses, rsync on the worker, worker
+Docker and NVIDIA runtime, identical image layers, the CX7 interface/HCAs on both
+nodes, a ping over the link, and weights present on both. After that the model
+is used like any other; the worker's `docker logs` appear in llama-swap's log as
+`[worker] ...` lines.
+
+- **Give big models time:** set `ready_timeout` to 1500+ — both nodes load
+  weights and the head waits for the worker.
+- **Verify the fabric:** add `-e NCCL_DEBUG=INFO` to the model's
+  `extra_docker_args`; `docker logs` on both nodes should show `NET/IB` for
+  both HCAs. Remove it afterwards.
+- **TP=2 mostly speeds up prefill**, not decode; a model that fits one node is
+  usually better left on one.
+- **One `nodes: 2` model at a time** (they share the master port and worker
+  memory). The default swapping already unloads the previous one. If you use
+  `groups:`, validation rejects two `nodes: 2` models in one `swap: false`
+  group, and requires that a `nodes: 2` model in an `exclusive: false` or
+  `persistent: true` group has every other `nodes: 2` model in that same
+  (swapping) group — such groups don't unload, or aren't unloaded by, the
+  default group. When the swap unloads a `nodes: 2` model, its worker
+  container is stopped too.
+- **Unloading:** llama-swap runs the model's `cmdStop` (`launch.py --stop
+  ${PID}`) instead of sending SIGTERM. `--stop` SIGTERMs the launcher first, so a
+  load still in preflight/sizing aborts before it starts any container, then
+  stops the worker and head containers.
+- `vllm_flags` must not set `-tp`/`--tensor-parallel-size`,
+  `-pp`/`--pipeline-parallel-size`, `--nnodes`, `--node-rank`,
+  `--master-addr`/`--master-port`, `--headless` or
+  `--distributed-executor-backend` (spaced or `=` form); validation rejects
+  them on `nodes: 2` models.
+
+### Cluster security
+
+- **API bind:** the head container uses host networking (NCCL needs it), but
+  its API binds to the Docker host-gateway address (`host.docker.internal`, or
+  `CLUSTER_API_HOST`), never `0.0.0.0`.
+- **The control plane is unauthenticated and on host interfaces.** With
+  `--network host`, the torch.distributed TCPStore (`master_port`, default
+  29501, on the head), NCCL's bootstrap sockets and vLLM's multi-node ZMQ
+  sockets bind on the host's interfaces on both nodes — the latter two on
+  ephemeral ports. None of them authenticate. Restrict them to the CX7 subnets
+  with your firewall. An **example only** (nftables, on both nodes; adjust the
+  subnets, `master_port`, and the range from `sysctl net.ipv4.ip_local_port_range`):
+
+  ```
+  # /etc/nftables.d/sparkyard-cx7.nft — load with: sudo nft -f <file>
+  table inet sparkyard_cx7 {
+    chain input {
+      type filter hook input priority 0; policy accept;
+      ct state established,related accept
+      iifname "lo" accept
+      ip saddr { 192.168.100.0/24, 192.168.101.0/24 } accept
+      tcp dport { 29501, 32768-60999 } drop
+    }
+  }
+  ```
+
+  (ufw users: the equivalent is allowing `from 192.168.100.0/24` and
+  `from 192.168.101.0/24` before denying `29501/tcp` and the ephemeral range.)
+  Test a load afterwards — a rule that blocks the CX7 link shows up as NCCL
+  timeouts.
+- **Worker trust:** llama-swap is already root-equivalent on the head (it holds
+  the Docker socket); it now also holds an ssh key to a `docker`-group — i.e.
+  root-equivalent — user on the worker. Keep the key dedicated (setup-key makes
+  one) and restrict it on the worker: prefix its line in `authorized_keys` with
+  `from="<head LAN IP>,<head_cx7_ip>"` (setup-key prints the line to use).
 
 ## GB10 / unified-memory gotchas
 

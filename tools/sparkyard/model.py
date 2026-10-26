@@ -101,6 +101,10 @@ class Model:
         return self.raw.get("gmem", {}).get("override")
 
     @property
+    def nodes(self):
+        return self.raw.get("nodes", 1)
+
+    @property
     def safety_gib(self):
         return self._get("safety_gib", 6)
 

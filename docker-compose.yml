@@ -178,7 +178,7 @@ services:
   # NoMachine port conflict on 4000.
   # Auth is ON: every API call must present the LITELLM_MASTER_KEY (sk-*).
   litellm:
-    image: docker.litellm.ai/berriai/litellm-database:main-stable@sha256:5ead13edd4efd89f32dab349c1f19447d395affca53f3aeae00f5e6e01b8c08d
+    image: docker.litellm.ai/berriai/litellm-database:main-stable@sha256:db36453d25e76c9eb689d7d51b8e5fa48843243d7a86ed1284cf574ce0107b3f
     container_name: litellm
     restart: unless-stopped
     depends_on:

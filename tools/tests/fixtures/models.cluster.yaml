@@ -1,0 +1,21 @@
+defaults:
+  vllm:
+    image: vllm-node:latest
+    gmem_min: 0.12
+    gmem_max: 0.85
+    safety_gib: 6
+    ttl: 3600
+    ready_timeout: 1800
+    check_endpoint: "/health"
+
+models:
+  - name: Big-TP2
+    engine: vllm
+    nodes: 2
+    path: vllm/Org/Big
+    container: big
+    max_model_len: 32768
+    max_num_seqs: 4
+    kv_dtype_bytes: 1
+    vllm_flags:
+      - --trust-remote-code

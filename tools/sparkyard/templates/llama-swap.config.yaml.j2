@@ -13,11 +13,17 @@ macros:
   tensor_parallel: "1"
 
 models:
+{%- macro cluster_env(c) -%}
+NODES=2 WORKER_SSH_HOST={{ c.worker.ssh_host }} WORKER_SSH_USER={{ c.worker.ssh_user }} WORKER_CX7_IP={{ c.worker.cx7_ip }} HEAD_CX7_IP={{ c.head_cx7_ip }} MASTER_PORT={{ c.master_port }} ETH_IF={{ c.eth_if }} IB_HCA={{ c.ib_hca }}
+{%- endmacro %}
 {% for m in models %}
   {{ m.name }}:
     ttl: {{ m.ttl }}
     checkEndpoint: "{{ m.check_endpoint }}"
 {%- if m.engine == "vllm" %}
+{%- if m.nodes > 1 %}
+    proxy: "http://host.docker.internal:${PORT}"
+{%- endif %}
     cmd: >
       env
       MODEL_PATH={{ m.model_path }}
@@ -30,6 +36,9 @@ models:
       GMEM_OVERRIDE={{ m.gmem_override }}
 {%- endif %}
       GMEM_MIN={{ m.gmem_min }} GMEM_MAX={{ m.gmem_max }} SAFETY_GIB={{ m.safety_gib }}
+{%- if m.nodes > 1 %}
+      {{ cluster_env(cluster) }}
+{%- endif %}
 {%- if m.extra_docker_args %}
       EXTRA_DOCKER_ARGS='{{ m.extra_docker_args }}'
 {%- endif %}
@@ -47,7 +56,11 @@ models:
 {%- for flag in m.vllm_flags %}
       {{ flag }}
 {%- endfor %}
+{%- if m.nodes > 1 %}
+    cmdStop: "env CONTAINER_NAME={{ m.container }}-${PORT} {{ cluster_env(cluster) }} python3 /app/scripts/launch.py --stop ${PID}"
+{%- else %}
     cmdStop: "docker stop {{ m.container }}-${PORT}"
+{%- endif %}
 {%- elif m.engine == "llamacpp" %}
     cmd: >
       docker run --rm --name {{ m.container }}-${PORT}

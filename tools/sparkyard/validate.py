@@ -1,6 +1,7 @@
 """Structural validation of the model list. Returns a list of error strings
 (empty = valid). On-disk path/quant checks are deferred to P4."""
 
+import ipaddress
 import re
 
 import yaml
@@ -23,6 +24,65 @@ def _is_yaml_special(s):
         return yaml.safe_load(s) != s
     except yaml.YAMLError:
         return True
+
+
+CLUSTER_RESERVED_FLAGS = (
+    "-tp", "--tensor-parallel-size", "-pp", "--pipeline-parallel-size",
+    "--distributed-executor-backend", "--nnodes", "--node-rank",
+    "--master-addr", "--master-port", "--headless",
+)
+
+
+def _is_ip(v):
+    try:
+        ipaddress.ip_address(v)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _nonempty_str(v):
+    return isinstance(v, str) and bool(v.strip())
+
+
+# eth_if / ib_hca items / ssh_host / ssh_user reach ssh argv, a remote shell
+# command and `-e K=V` docker args: no whitespace, quotes, or leading '-'.
+CLUSTER_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
+_TOKEN_HINT = "letters, digits, '.', '_', ':' or '-', not starting with '-'"
+
+
+def _bad_token(v):
+    return CLUSTER_TOKEN_RE.fullmatch(v) is None
+
+
+def validate_cluster(cluster):
+    """Check the settings `cluster:` block. Exactly one worker is supported."""
+    errors = []
+    if not _is_ip(cluster.head_cx7_ip):
+        errors.append(f"cluster: head_cx7_ip {cluster.head_cx7_ip!r} is not a valid IP address")
+    port = cluster.master_port
+    if not isinstance(port, int) or isinstance(port, bool) or not (1 <= port <= 65535):
+        errors.append(f"cluster: master_port must be an integer in 1..65535 (got {port!r})")
+    for fld in ("eth_if", "ib_hca"):
+        val = getattr(cluster, fld)
+        if not _nonempty_str(val):
+            errors.append(f"cluster: {fld} must be a non-empty string")
+        elif any(_bad_token(x) for x in (val.split(",") if fld == "ib_hca" else [val])):
+            what = "comma-separated HCA names, each" if fld == "ib_hca" else "it"
+            errors.append(f"cluster: {fld} {val!r} is invalid — {what} must be {_TOKEN_HINT}")
+    if len(cluster.workers) != 1:
+        errors.append(f"cluster: exactly one worker is supported (got {len(cluster.workers)})")
+        return errors
+    w = cluster.workers[0]
+    if not _is_ip(w.cx7_ip):
+        errors.append(f"cluster: worker cx7_ip {w.cx7_ip!r} is not a valid IP address")
+    for fld in ("ssh_host", "ssh_user"):
+        val = getattr(w, fld)
+        if not _nonempty_str(val):
+            errors.append(f"cluster: worker {fld} must be a non-empty string")
+        elif _bad_token(val):
+            errors.append(f"cluster: worker {fld} {val!r} is invalid — must be {_TOKEN_HINT}")
+    return errors
 
 
 GROUP_FLAGS = ("swap", "exclusive", "persistent")
@@ -63,8 +123,10 @@ def _validate_groups(groups, model_names):
     return errors
 
 
-def validate(models, groups=None):
+def validate(models, groups=None, cluster=None):
     errors = []
+    if cluster is not None:
+        errors.extend(validate_cluster(cluster))
     seen = {}
     for m in models:
         if m.engine not in ENGINES:
@@ -134,6 +196,22 @@ def validate(models, groups=None):
             if not isinstance(repo, str) or not repo.strip() or repo.count("/") != 1:
                 errors.append(f"{m.name}: hf_repo must be a non-empty 'org/model' string (got {repo!r})")
 
+        nodes = m.nodes
+        if isinstance(nodes, bool) or nodes not in (1, 2) or not isinstance(nodes, int):
+            errors.append(f"{m.name}: nodes must be 1 or 2 (got {nodes!r})")
+        elif nodes == 2:
+            if m.engine != "vllm":
+                errors.append(f"{m.name}: nodes > 1 is only supported for engine vllm")
+            if cluster is None:
+                errors.append(f"{m.name}: nodes: 2 needs a cluster: block in settings.local.yaml")
+            for item in (m.raw.get("vllm_flags") or []):
+                if not isinstance(item, str):
+                    continue
+                for tok in item.split():
+                    if tok.split("=", 1)[0] in CLUSTER_RESERVED_FLAGS:
+                        errors.append(f"{m.name}: vllm_flags {tok.split('=', 1)[0]} is set by "
+                                      f"the cluster launcher on nodes: 2 models — remove it")
+
         if m.engine == "vllm":
             if m.gmem_min is None or m.gmem_max is None:
                 errors.append(f"{m.name}: vllm model needs gmem.min/max (none set and no engine default)")
@@ -169,5 +247,30 @@ def validate(models, groups=None):
 
     if groups:
         errors.extend(_validate_groups(groups, {m.name for m in models}))
+        two = {m.name for m in models if m.nodes == 2 and not isinstance(m.nodes, bool)}
+        if isinstance(groups, dict):
+            for gname, g in groups.items():
+                if not isinstance(g, dict) or not isinstance(g.get("members"), list):
+                    continue
+                both = sorted({x for x in g["members"] if x in two})
+                if not both:
+                    continue
+                if g.get("swap") is False and len(both) >= 2:
+                    errors.append(f"group '{gname}': nodes: 2 models {both} cannot be loaded "
+                                  f"together (swap: false) — they share the master port and "
+                                  f"worker memory")
+                # A non-exclusive group never unloads other groups (including the
+                # implicit, exclusive default group), and a persistent group is never
+                # unloaded by them — so any nodes: 2 model outside this group could be
+                # resident at the same time as this group's nodes: 2 member.
+                if g.get("exclusive") is False or g.get("persistent") is True:
+                    outside = sorted(two - set(both))
+                    if outside:
+                        kind = ("exclusive: false" if g.get("exclusive") is False
+                                else "persistent: true")
+                        errors.append(f"group '{gname}' ({kind}): nodes: 2 model(s) {both} "
+                                      f"and {outside} outside the group cannot be loaded "
+                                      f"together — put every nodes: 2 model in '{gname}' "
+                                      f"(they share the master port and worker memory)")
 
     return errors

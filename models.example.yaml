@@ -50,6 +50,25 @@ defaults:
 #     members:
 #       - My-Embedding-Model
 
+# Two-node tensor-parallel (needs a `cluster:` block in settings.local.yaml; see
+# the README's "Two-node (CX7) cluster"). Do not set -tp/--tensor-parallel-size,
+# --nnodes, --headless etc. in vllm_flags — the launcher owns them. Put this
+# entry under `models:` below; only one nodes: 2 model can be resident at a time.
+#
+#   - name: My-Large-Model
+#     engine: vllm
+#     nodes: 2
+#     container: vllm-my-large
+#     hf_repo: org/My-Large-Model
+#     path: vllm/org/My-Large-Model
+#     max_model_len: 65536
+#     max_num_seqs: 4
+#     kv_dtype_bytes: 1
+#     ready_timeout: 1800
+#     # extra_docker_args: "-e NCCL_DEBUG=INFO"   # verify NET/IB, then remove
+#     litellm:
+#       max_tokens: 8192
+
 models:
   # ---- vLLM (safetensors) ----
   - name: Qwen2.5-3B-Instruct

@@ -74,6 +74,7 @@ sparkyard models      # list configured models (--json / --on-disk / --engine)
 sparkyard explain M   # dry-run a model's launcher: gmem plan, no load
 sparkyard reload      # render + restart the services that read the config
 sparkyard doctor      # advisory on-disk model report
+sparkyard cluster setup-key|check|sync [M]   # two-node: ssh key / preflight / copy image + weights
 sparkyard download / add-model / vllm-node / bench / validate
 sparkyard vllm-node --use-wheels     # same build, standalone (writes no pins)
 MODELS="name" sparkyard bench        # scope the sweep; unscoped loads every model
@@ -87,13 +88,20 @@ make venv / test / lint    # bootstrap + dev (make-only)
   and picks `--gpu-memory-utilization` in `[GMEM_MIN, GMEM_MAX]`. It enforces a
   `SYSTEM_RAM_CEILING_GIB` crash-guard because ~126.5 GB used RAM crashes the
   box. `--print` dry-runs it (prints the gmem + docker argv without launching).
+- **`launch.py` cluster mode** (`NODES=2`, from a `nodes: 2` model): ssh preflight,
+  sizes both nodes at tp=2 and uses the smaller gmem, starts the worker
+  (`<name>-w`, `--headless`) detached over ssh, runs the head as a child so
+  signals are forwarded and the worker is stopped on exit. `--stop` tears both
+  down. Setup/verification: `sparkyard cluster ...`; README "Two-node (CX7) cluster".
 - **Folded-`cmd:` blank-line trap:** a blank line in a `cmd: >` block becomes a
   literal newline and breaks the `env`-prefixed launcher invocation → silent OOM.
   The template structurally avoids this; don't introduce blank lines into
   generated `cmd:` blocks.
 - **Container networking:** model containers spawn with
   `--network container:llama-swap` so they share llama-swap's namespace and bind
-  `localhost:PORT` inside it. Never give them `network_mode: host`.
+  `localhost:PORT` inside it. Never give them `network_mode: host`. The one
+  exception is the `nodes: 2` cluster head, which `launch.py` runs with host
+  networking (NCCL/CX7) but binds to the host-gateway IP, never `0.0.0.0`.
 - **llama.cpp on GB10:** needs `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` + `--load-mode none`
   (mmap is unsafe on unified memory). `--no-mmap` is the deprecated spelling;
   `--load-mode auto` was measured to avoid mmap on this device anyway, but the

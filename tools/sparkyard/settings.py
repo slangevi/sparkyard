@@ -1,5 +1,6 @@
 """Machine settings loaded from settings.local.yaml."""
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from typing import Optional
 import yaml
 
@@ -20,11 +21,37 @@ class VllmBuild:
 
 
 @dataclass
+class ClusterWorker:
+    name: str
+    ssh_host: str
+    ssh_user: str
+    cx7_ip: str
+
+
+@dataclass
+class Cluster:
+    head_cx7_ip: str
+    eth_if: str
+    ib_hca: str
+    workers: list = field(default_factory=list)   # list[ClusterWorker]
+    master_port: int = 29501
+
+    @property
+    def worker(self) -> ClusterWorker:
+        return self.workers[0]
+
+
+@dataclass
 class Settings:
     llm_root: str
     repo_path: str
     home: str = ""              # optional; used by {home} in user mounts
     vllm: Optional[VllmBuild] = None   # set in load(); None only if constructed directly
+    cluster: Optional[Cluster] = None  # set in load() when a `cluster:` block exists
+
+    @property
+    def cluster_dir(self) -> str:
+        return os.path.join(self.repo_path, "llama-swap", "cluster")
 
     @classmethod
     def load(cls, path):
@@ -42,6 +69,17 @@ class Settings:
                                s.placeholder_map()),
             vllm_ref=v.get("vllm_ref", DEFAULT_VLLM_REF),
         )
+        c = data.get("cluster")
+        if c is not None:
+            s.cluster = Cluster(
+                head_cx7_ip=c["head_cx7_ip"],
+                eth_if=c["eth_if"],
+                ib_hca=c["ib_hca"],
+                workers=[ClusterWorker(name=w["name"], ssh_host=w["ssh_host"],
+                                       ssh_user=w["ssh_user"], cx7_ip=w["cx7_ip"])
+                         for w in c["workers"]],
+                master_port=c.get("master_port", 29501),
+            )
         return s
 
     def placeholder_map(self):

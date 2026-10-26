@@ -10,6 +10,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     curl \
     docker.io \
     python3 \
+    openssh-client \
+    rsync \
     && rm -rf /var/lib/apt/lists/*
 
 # Pinned, checksummed llama-swap release (was releases/latest, unverified).

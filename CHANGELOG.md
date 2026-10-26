@@ -52,6 +52,21 @@ the prior work that inspired it.
 
 ### Fixed
 
+- **Two-node: draft models were missing on the worker.** A `nodes: 2` model
+  whose flags reference another path under `/models` (e.g. a dspark draft in
+  `--speculative-config`) died on the worker at startup. `cluster sync` now
+  rsyncs those extra paths, `cluster check` reports an `extra <model> <path>`
+  line for each, and `launch.py` preflight fails fast if one is missing on the
+  worker (rendered as `EXTRA_PATHS`). Chat templates are not included, since only
+  the head reads them.
+- **Two-node: a dead worker left the head waiting ~10 minutes.** The head now
+  polls the worker container every ~5 s and stops itself, exiting non-zero,
+  when the worker is gone. Before this it waited out the torch.distributed
+  timeout ("1/2 clients joined").
+- **`gmem.override` on a `nodes: 2` model is now a validation error.** It
+  bypasses the per-node sizing (neither node's free memory is checked), so set
+  `gmem.min`/`gmem.max` instead.
+
 - **Claude Code's effort setting never reached the model.** Since `/v1/messages`
   goes through chat completions (below), Claude Code's `effortLevel` arrives as
   `reasoning_effort` — and `drop_params` strips that for an `openai/` deployment

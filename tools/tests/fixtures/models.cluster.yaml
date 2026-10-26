@@ -19,3 +19,4 @@ models:
     kv_dtype_bytes: 1
     vllm_flags:
       - --trust-remote-code
+      - --speculative-config '{"method":"dspark","model":"/models/vllm/Org/Big-DSpark","num_speculative_tokens":7}'

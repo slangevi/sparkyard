@@ -3,7 +3,17 @@
 A Model merges per-engine `defaults` with per-model overrides and derives the
 fields the templates consume (container path, host path, served names).
 """
+import re
 from dataclasses import dataclass
+
+# A container-side `/models/<rel>` reference: not inside another path (e.g. not
+# the tail of /data/models/x), up to a quote, backslash (escaped JSON),
+# whitespace, comma or `}`. A preceding `--chat-template` (spaced or `=`) is
+# captured so it can be skipped.
+_MODELS_REF = re.compile(r"(--chat-template[=\s]+)?(?<![\w./-])/models/([^'\"\\\s,}]+)")
+# In extra_docker_args, `/models/...` right after `:` is a bind-mount target
+# (`-v host:/models/x:ro`), not a path under llm_root: skipped.
+_MODELS_REF_DOCKER = re.compile(r"(--chat-template[=\s]+)?(?<![\w./:-])/models/([^'\"\\\s,}]+)")
 
 
 @dataclass
@@ -134,6 +144,42 @@ class Model:
     @property
     def vllm_flags(self):
         return list(self.raw.get("vllm_flags", []))
+
+    @property
+    def extra_paths(self):
+        """Paths under llm_root (relative, no `/models/` prefix) that this model
+        references besides its own `path` — e.g. a speculative-decoding draft
+        model in `--speculative-config '{"model":"/models/..."}'`. Collected from
+        every `/models/<rel>` in vllm_flags, extra_docker_args and pre_launch_cmd,
+        deduped in first-seen order, trailing `/` stripped. A bind-mount target
+        in extra_docker_args (`-v host:/models/x`) is not one.
+
+        Excluded: the model's own `path` (and anything under it, which syncing
+        the model already covers), and chat templates (the `chat_template` field
+        or a `--chat-template` flag value) — only the API server on the head
+        reads those, so a nodes: 2 worker never needs them."""
+        own = str(self.raw.get("path", "")).strip("/")
+        ct = self.chat_template
+        skip = {ct.strip("/")} if isinstance(ct, str) and not ct.startswith("/") else set()
+        if isinstance(ct, str) and ct.startswith("/models/"):
+            skip.add(ct[len("/models/"):].strip("/"))
+        sources = [(f, _MODELS_REF) for f in self.vllm_flags if isinstance(f, str)]
+        for fld, rx in (("extra_docker_args", _MODELS_REF_DOCKER),
+                        ("pre_launch_cmd", _MODELS_REF)):
+            v = self.raw.get(fld)
+            if isinstance(v, str):
+                sources.append((v, rx))
+        out = []
+        for text, rx in sources:
+            for m in rx.finditer(text):
+                rel = m.group(2).rstrip("/")
+                if m.group(1) or not rel or rel in skip:
+                    continue
+                if own and (rel == own or rel.startswith(own + "/")):
+                    continue
+                if rel not in out:
+                    out.append(rel)
+        return out
 
     # --- llamacpp ---
     @property

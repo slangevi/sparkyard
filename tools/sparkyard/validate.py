@@ -85,6 +85,18 @@ def validate_cluster(cluster):
     return errors
 
 
+# Must stay identical to llama-swap/scripts/launch.py `_EXTRA_PART` (the
+# launcher cannot import this package); tests assert both accept/reject the
+# same cases, so a path that validates never fails the launch preflight.
+EXTRA_PATH_PART_RE = re.compile(r"^[A-Za-z0-9_.+@=][A-Za-z0-9_.+@=-]*$")
+
+
+def extra_path_ok(rel):
+    """The launcher's EXTRA_PATHS rule: relative, every component matches
+    EXTRA_PATH_PART_RE and is not '.' or '..' (no empty components)."""
+    return all(EXTRA_PATH_PART_RE.match(x) and x not in (".", "..") for x in rel.split("/"))
+
+
 GROUP_FLAGS = ("swap", "exclusive", "persistent")
 
 
@@ -211,6 +223,17 @@ def validate(models, groups=None, cluster=None):
                     if tok.split("=", 1)[0] in CLUSTER_RESERVED_FLAGS:
                         errors.append(f"{m.name}: vllm_flags {tok.split('=', 1)[0]} is set by "
                                       f"the cluster launcher on nodes: 2 models — remove it")
+            # GMEM_OVERRIDE skips sizing on both nodes, so neither node's free
+            # memory (nor the smaller of the two plans) is ever consulted.
+            if m.gmem_override is not None:
+                errors.append(f"{m.name}: gmem.override is single-node tuning and bypasses "
+                              f"per-node sizing; remove it for nodes: 2 (use gmem.min/max)")
+            # Extra paths are rsynced to, and tested on, the worker under llm_root.
+            for rel in m.extra_paths:
+                if not extra_path_ok(rel):
+                    errors.append(f"{m.name}: extra path /models/{rel} is not a plain path "
+                                  f"under /models/ (components of letters, digits, '._+@=-', "
+                                  f"not starting with '-'; no '.', '..' or empty components)")
 
         if m.engine == "vllm":
             if m.gmem_min is None or m.gmem_max is None:

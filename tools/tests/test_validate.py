@@ -432,3 +432,69 @@ def test_validate_cluster_charset_accepts_real_values():
     assert validate_cluster(c) == []
     c = _cluster(workers=[ClusterWorker("w", "fe80::1", "a.b-c", "10.0.0.2")])
     assert validate_cluster(c) == []
+
+
+def test_nodes2_extra_path_with_dotdot_rejected():
+    flags = ['--speculative-config \'{"model":"/models/vllm/../../etc","x":1}\'']
+    errors = validate(load_models(_vllm(nodes=2, vllm_flags=flags)), cluster=_cluster())
+    assert any("extra path" in e and ".." in e for e in errors)
+    ok = validate(load_models(_vllm(nodes=2, vllm_flags=['--x /models/vllm/a..b'])),
+                  cluster=_cluster())
+    assert ok == []
+
+
+def test_single_node_extra_path_dotdot_not_checked():
+    flags = ['--speculative-config \'{"model":"/models/vllm/../x"}\'']
+    assert validate(load_models(_vllm(vllm_flags=flags))) == []
+
+
+def test_nodes2_gmem_override_rejected():
+    gm = {"min": 0.1, "max": 0.2, "override": 0.7}
+    errors = validate(load_models(_vllm(nodes=2, gmem=gm)), cluster=_cluster())
+    assert ("V: gmem.override is single-node tuning and bypasses per-node sizing; "
+            "remove it for nodes: 2 (use gmem.min/max)") in errors
+    assert validate(load_models(_vllm(gmem=gm))) == []
+
+
+# One table, both sides: validate's extra-path rule must match launch.py's
+# parse_extra_paths exactly, or a config validates and then fails every load.
+_EXTRA_CASES = [
+    ("vllm/Org/Big-DSpark", True), ("vllm/x/f.json", True), ("a..b/c", True),
+    (".hidden/x", True), ("a+b@c=d/e_f", True),
+    ("../etc", False), ("a/../b", False), ("a/..", False), ("./a", False),
+    ("a//b", False), ("/abs", False), ("-rf", False), ("a/-x", False),
+    ("a~b", False), ("a(b)", False), ("a$b", False), ("a;b", False), ("a\\b", False),
+]
+
+
+def _launch_mod():
+    import importlib.util
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "llama-swap", "scripts",
+                        "launch.py")
+    spec = importlib.util.spec_from_file_location("launch_for_validate", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("rel,ok", _EXTRA_CASES)
+def test_extra_path_rule_matches_launcher(rel, ok):
+    from sparkyard.validate import extra_path_ok
+    assert extra_path_ok(rel) is ok
+    launch = _launch_mod()
+    if ok:
+        assert launch.parse_extra_paths(rel) == [rel]
+    else:
+        with pytest.raises(SystemExit):
+            launch.parse_extra_paths(rel)
+
+
+def test_extra_path_regex_constant_identical_to_launcher():
+    from sparkyard.validate import EXTRA_PATH_PART_RE
+    assert EXTRA_PATH_PART_RE.pattern == _launch_mod()._EXTRA_PART.pattern
+
+
+def test_nodes2_extra_path_outside_launcher_charset_rejected():
+    flags = ["--x /models/vllm/a~b"]
+    errors = validate(load_models(_vllm(nodes=2, vllm_flags=flags)), cluster=_cluster())
+    assert any(e.startswith("V: extra path /models/vllm/a~b") for e in errors)

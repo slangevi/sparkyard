@@ -82,3 +82,53 @@ def test_hf_repo_optional(tmp_path):
     ms = load_models(raw)
     assert ms[0].hf_repo == "org/A"
     assert ms[1].hf_repo is None
+
+
+# --- extra_paths (draft models etc. referenced from flags) ---
+
+def _m(**raw):
+    base = {"name": "X", "engine": "vllm", "path": "vllm/Org/X"}
+    base.update(raw)
+    return load_models({"defaults": {}, "models": [base]})[0]
+
+
+DSPARK = ('--speculative-config \'{"method":"dspark","model":"/models/vllm/RadixArk/'
+          'Qwen3.8-27B-DSpark","num_speculative_tokens":7}\'')
+
+
+def test_extra_paths_from_speculative_config():
+    assert _m(vllm_flags=[DSPARK]).extra_paths == ["vllm/RadixArk/Qwen3.8-27B-DSpark"]
+
+
+def test_extra_paths_none():
+    assert _m().extra_paths == []
+    assert _m(vllm_flags=["--trust-remote-code"]).extra_paths == []
+
+
+def test_extra_paths_all_sources_deduped_in_order():
+    m = _m(vllm_flags=[DSPARK, "--foo /models/a/b/", "--bar=/models/a/b"],
+           extra_docker_args="-v /models/c,d -e X=/models/e/f.json",
+           pre_launch_cmd="cp /models/g/h /tmp && ls /models/vllm/RadixArk/Qwen3.8-27B-DSpark")
+    assert m.extra_paths == ["vllm/RadixArk/Qwen3.8-27B-DSpark", "a/b", "c", "e/f.json", "g/h"]
+
+
+def test_extra_paths_excludes_own_path_and_chat_templates():
+    m = _m(vllm_flags=["--x /models/vllm/Org/X", "--y /models/vllm/Org/X/sub",
+                       "--chat-template /models/t/a.jinja", "--chat-template=/models/t/b.jinja"],
+           chat_template="t/c.jinja", pre_launch_cmd="cat /models/t/c.jinja")
+    assert m.extra_paths == []
+
+
+def test_extra_paths_ignores_models_inside_other_paths():
+    assert _m(extra_docker_args="-v /data/models/x:/opt/y").extra_paths == []
+
+
+def test_extra_paths_escaped_json_stops_at_backslash():
+    m = _m(vllm_flags=['--speculative-config {\\"model\\":\\"/models/vllm/D\\"}'])
+    assert m.vllm_flags[0] == '--speculative-config {\\"model\\":\\"/models/vllm/D\\"}'
+    assert m.extra_paths == ["vllm/D"]
+
+
+def test_extra_paths_skip_bind_mount_targets_in_docker_args():
+    m = _m(extra_docker_args="-v /host/cache:/models/cache:ro -v /x:/opt/y -e A=/models/real/p")
+    assert m.extra_paths == ["real/p"]

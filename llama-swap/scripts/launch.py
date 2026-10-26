@@ -34,9 +34,14 @@ Env contract (same names/defaults as the original):
             to the worker. Rank 0 runs here, rank 1 (--headless) on the worker.
             Preflight (ssh, image layers, weights on the worker; stale `-w` removed),
             then both nodes are sized at tp=2 and both get the smaller gmem.
+            EXTRA_PATHS (optional, comma-separated, relative to LLM_ROOT_PATH):
+            other paths the flags reference (e.g. a draft model) that preflight
+            also requires on the worker.
             The worker starts detached over ssh; the head runs as a child (not
             exec) so SIGTERM/SIGINT are forwarded and the worker is stopped when
-            the head exits. The head API binds to CLUSTER_API_HOST, else the IP
+            the head exits. The worker is polled (docker container inspect over ssh, ~5 s);
+            if it is gone the head is SIGTERMed instead of waiting out the
+            torch.distributed timeout. The head API binds to CLUSTER_API_HOST, else the IP
             of host.docker.internal (never 0.0.0.0).
             `--stop [PID]` (needs only CONTAINER_NAME + the cluster env) first
             SIGTERMs the launcher PID (llama-swap's ${PID}) so a launch still in
@@ -376,6 +381,28 @@ def reclaim_and_recompute(names, cfg_vals, params, read=None, run=_docker,
                      f"free={result[2]['free']:.2f}GiB ({'ok' if result[1] != 'ERR' else 'still short'})\n")
     return result
 
+# Must stay identical to tools/sparkyard/validate.py EXTRA_PATH_PART_RE (this
+# script cannot import the package; a test compares the two).
+_EXTRA_PART = re.compile(r"^[A-Za-z0-9_.+@=][A-Za-z0-9_.+@=-]*$")
+
+
+def parse_extra_paths(raw):
+    """EXTRA_PATHS (rendered for nodes: 2 models): comma-separated paths relative
+    to LLM_ROOT_PATH that the model's flags reference besides its own weights
+    (e.g. a speculative-decoding draft model). Conservative charset; no leading
+    '/', no '.'/'..' or empty components."""
+    out = []
+    for rel in (raw or "").split(","):
+        if not rel:
+            continue
+        parts = rel.split("/")
+        if any(not _EXTRA_PART.match(x) or x in (".", "..") for x in parts):
+            _fatal(f"[cluster] FATAL: EXTRA_PATHS entry {rel!r} is not a plain relative path "
+                   f"under LLM_ROOT_PATH (letters, digits, '._+@=-'; no leading '/', no '..')")
+        out.append(rel)
+    return out
+
+
 def ssh_argv(c, remote):
     """ssh to the worker: key-only, no prompts, pinned host key, no ssh config."""
     return ["ssh", "-i", f"{c.ssh_dir}/id_ed25519",
@@ -475,6 +502,16 @@ def _run(argv):
     return r.returncode, r.stdout, r.stderr
 
 
+def _run_poll(argv, timeout=15):
+    """_run with a timeout, for the worker liveness poll: a hung ssh must not
+    stall the head's wait loop. A timeout reads as an ssh failure (rc 255)."""
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 255, "", "worker poll timed out"
+    return r.returncode, r.stdout, r.stderr
+
+
 def _target(c):
     return f"{c.worker_user}@{c.worker_host}"
 
@@ -492,8 +529,10 @@ def image_fingerprint(layers_json):
     return hashlib.sha256(text.encode()).hexdigest()[:12] if text else ""
 
 
-def cluster_preflight(c, env, llm_root, run=_run, model=None, remove_stale=True):
-    """Fail fast, naming the worker and the fix, before anything starts."""
+def cluster_preflight(c, env, llm_root, run=_run, model=None, remove_stale=True,
+                      extra_paths=()):
+    """Fail fast, naming the worker and the fix, before anything starts.
+    `extra_paths` (from EXTRA_PATHS) must also exist on the worker."""
     t = _target(c)
     rc, out, err = run(ssh_argv(c, ["true"]))
     if rc != 0:
@@ -521,6 +560,13 @@ def cluster_preflight(c, env, llm_root, run=_run, model=None, remove_stale=True)
         name = model or Path(env.model_path).name
         _fatal(f"[cluster] FATAL: model weights missing on worker {t}: {cfg} not found — "
                f"run sparkyard cluster sync {name}")
+    for rel in extra_paths:
+        p = f"{llm_root.rstrip('/')}/{rel}"
+        rc, out, err = run(ssh_argv(c, ["test", "-e", p]))
+        if rc != 0:
+            name = model or env.container_name
+            _fatal(f"[cluster] FATAL: worker {c.worker_host} is missing {p} (referenced by "
+                   f"this model's flags) — run sparkyard cluster sync {name}")
     if remove_stale:
         # A launcher killed by SIGKILL (e.g. llama-swap's unloadTimeout escalation)
         # leaves the detached worker, and possibly the head container, behind.
@@ -612,16 +658,76 @@ def _join_log_threads(timeout=None):
         _LOG_THREADS.pop().join(timeout)
 
 
+def _worker_status(run, poll_argv):
+    """"alive", "gone" or "unknown" from `ssh ... docker container inspect -f
+    '{{.State.Running}}' <name>-w` (last stdout line, so shell noise before it
+    is ignored). The worker runs with --rm, so once it exits
+    inspect fails with "No such object": that is the death signal. Anything
+    else that fails (ssh rc 255, a runner error) is "unknown"."""
+    try:
+        rc, out, err = run(poll_argv)
+    except OSError:
+        return "unknown"
+    if rc == 0:
+        lines = (out or "").strip().splitlines()
+        last = lines[-1].strip() if lines else ""
+        return {"true": "alive", "false": "gone"}.get(last, "unknown")
+    text = f"{out or ''}\n{err or ''}".lower()
+    if "no such object" in text or "no such container" in text:
+        return "gone"
+    return "unknown"
+
+
+WORKER_POLL_MISSES = 3
+
+
+def _wait_head(proc, state, run, poll_argv, interval, worker_name, signal_mod):
+    """Wait for the head, polling the worker every `interval` s. If the worker
+    is gone (or the poll fails WORKER_POLL_MISSES times in a row), SIGTERM the
+    head and wait for it; returns True in that case. Once a stop signal has
+    arrived (already forwarded to the head) polling stops."""
+    misses = 0
+    while True:
+        try:
+            proc.wait(timeout=interval)
+            return False
+        except subprocess.TimeoutExpired:
+            pass
+        if state["sig"] is not None:
+            proc.wait()
+            return False
+        status = _worker_status(run, poll_argv)
+        if state["sig"] is not None:
+            continue
+        if status == "alive":
+            misses = 0
+            continue
+        if status == "unknown":
+            misses += 1
+            if misses < WORKER_POLL_MISSES:
+                continue
+        sys.stderr.write(f"[cluster] worker {worker_name} exited before/while serving — "
+                         f"stopping head\n")
+        sys.stderr.flush()
+        proc.send_signal(signal_mod.SIGTERM)
+        proc.wait()
+        return True
+
+
 def run_cluster(head_argv, worker_argv, stop_worker_argv, run=_run,
                 popen=subprocess.Popen, signal_mod=signal, state=None,
-                logs_argv=None, log_popen=subprocess.Popen):
+                logs_argv=None, log_popen=subprocess.Popen, poll_argv=None,
+                poll_interval=5, worker_name="worker", poll_run=None):
     """Start the worker detached, then the head as a child. Forward SIGTERM/
     SIGINT to the head; whenever the head ends, stop the worker. Returns the
     head's exit code (128+N if it died of signal N). `state` comes from
     install_abort() when the caller installed the handlers earlier (so a stop
     during preflight/sizing is seen here); otherwise they are installed now.
     `logs_argv`, if given, is streamed to stderr as "[worker] ..." lines while
-    the worker runs."""
+    the worker runs. `poll_argv`, if given, is run every `poll_interval` s
+    while the head runs; when it shows the worker gone, the head is stopped
+    (without it a head whose worker died waits out the torch.distributed
+    timeout, ~10 min) and a non-zero code is returned."""
     if state is None:
         # Installed before the worker starts, so a stop during `docker run -d`
         # still reaches the cleanup below instead of killing the launcher.
@@ -646,9 +752,15 @@ def run_cluster(head_argv, worker_argv, stop_worker_argv, run=_run,
         state["proc"] = proc
         if state["sig"] is not None:
             proc.send_signal(state["sig"])
-        proc.wait()
+        died = False
+        if poll_argv is None:
+            proc.wait()
+        else:
+            died = _wait_head(proc, state, poll_run or run, poll_argv, poll_interval,
+                              worker_name, signal_mod)
         code = proc.returncode
-        return 128 - code if code < 0 else code
+        code = 128 - code if code < 0 else code
+        return (code or 1) if died else code
     finally:
         run(stop_worker_argv)
         _stop_logs(logs)
@@ -795,11 +907,12 @@ def main_cluster(env, passthrough, print_mode):
 def _main_cluster(env, passthrough, print_mode, state):
     c = cluster_env_from_environ()
     llm_root = _req("LLM_ROOT_PATH")
+    extra_paths = parse_extra_paths(os.environ.get("EXTRA_PATHS"))
     # `_run` is looked up at call time so tests can monkeypatch launch._run.
     # --print runs only the read-only preflight calls (ssh true, image layers,
     # weights test): no stale-container `docker rm -f` on the worker.
     cluster_preflight(c, env, llm_root, run=_run, model=_served_name(passthrough),
-                      remove_stale=not print_mode)
+                      remove_stale=not print_mode, extra_paths=extra_paths)
     gmem_str = _gmem_override()
     if gmem_str is None:
         params = _params(env)
@@ -845,8 +958,11 @@ def _main_cluster(env, passthrough, print_mode, state):
         return 0
     stop = ssh_argv(c, ["docker", "stop", f"{env.container_name}-w"])
     logs = ssh_argv(c, ["docker", "logs", "-f", f"{env.container_name}-w"])
+    poll = ssh_argv(c, ["docker", "container", "inspect", "-f", "{{.State.Running}}",
+                        f"{env.container_name}-w"])
     sys.exit(run_cluster(head, ssh_argv(c, worker), stop, run=_run, state=state,
-                         logs_argv=logs))
+                         logs_argv=logs, poll_argv=poll, poll_run=_run_poll,
+                         worker_name=f"{env.container_name}-w"))
 
 
 def main(argv=None):

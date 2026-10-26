@@ -212,7 +212,7 @@ services:
   # Stores LiteLLM's virtual keys, usage logs, and team/budget data.
   # Exposed on 15432 to avoid conflict with any host Postgres on 5432.
   litellm-db:
-    image: postgres:15-alpine@sha256:fe0737ba566a2c5b2a28f34433c0a423261900ec17b9bf7ad115e1aae7e57f1b
+    image: postgres:15-alpine@sha256:a8e042598834300dfaa17a54f695b87b7f25d3490433bbbe2ef3bffbb9747f24
     container_name: litellm-postgres
     restart: unless-stopped
     healthcheck:
@@ -233,7 +233,7 @@ services:
   # Browser chat over the LiteLLM gateway. Own login (first signup = admin).
   # Reads OPENAI_API_KEY + WEBUI_SECRET_KEY from secrets.webui.env (least-privilege).
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main@sha256:6a773e5c3a246b65cbe74ce942b294292c0e5f81c138f703d111bc162f7d7c3d  # pinned 2026-06-14
+    image: ghcr.io/open-webui/open-webui:main@sha256:096c8f3d3132016210ca87b0b4dff01d2d66d9fe4fee088fae13fc30f9ac54f3  # 0.12.4, pinned 2026-10-26
     container_name: open-webui
     restart: unless-stopped
     depends_on:

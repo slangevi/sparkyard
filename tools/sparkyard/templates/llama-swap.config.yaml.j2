@@ -13,8 +13,8 @@ macros:
   tensor_parallel: "1"
 
 models:
-{%- macro cluster_env(c) -%}
-NODES=2 WORKER_SSH_HOST={{ c.worker.ssh_host }} WORKER_SSH_USER={{ c.worker.ssh_user }} WORKER_CX7_IP={{ c.worker.cx7_ip }} HEAD_CX7_IP={{ c.head_cx7_ip }} MASTER_PORT={{ c.master_port }} ETH_IF={{ c.eth_if }} IB_HCA={{ c.ib_hca }}
+{%- macro cluster_env(c, extra_paths=none) -%}
+NODES=2 WORKER_SSH_HOST={{ c.worker.ssh_host }} WORKER_SSH_USER={{ c.worker.ssh_user }} WORKER_CX7_IP={{ c.worker.cx7_ip }} HEAD_CX7_IP={{ c.head_cx7_ip }} MASTER_PORT={{ c.master_port }} ETH_IF={{ c.eth_if }} IB_HCA={{ c.ib_hca }}{% if extra_paths %} EXTRA_PATHS={{ extra_paths | join(',') }}{% endif %}
 {%- endmacro %}
 {% for m in models %}
   {{ m.name }}:
@@ -37,7 +37,7 @@ NODES=2 WORKER_SSH_HOST={{ c.worker.ssh_host }} WORKER_SSH_USER={{ c.worker.ssh_
 {%- endif %}
       GMEM_MIN={{ m.gmem_min }} GMEM_MAX={{ m.gmem_max }} SAFETY_GIB={{ m.safety_gib }}
 {%- if m.nodes > 1 %}
-      {{ cluster_env(cluster) }}
+      {{ cluster_env(cluster, m.extra_paths) }}
 {%- endif %}
 {%- if m.extra_docker_args %}
       EXTRA_DOCKER_ARGS='{{ m.extra_docker_args }}'

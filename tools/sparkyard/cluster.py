@@ -115,6 +115,32 @@ def _remote_weights(settings, path, run):
     return sum(int(x) for x in _out(p).split() if x.isdigit())
 
 
+def _local_tree_size(settings, rel):
+    """Total bytes of a file, or of every regular file under a directory
+    (recursive); None if it does not exist on the head."""
+    p = os.path.join(settings.llm_root, rel)
+    if os.path.isfile(p):
+        return os.stat(p).st_size
+    if not os.path.isdir(p):
+        return None
+    total = 0
+    for root, _, files in os.walk(p):
+        for n in files:
+            fp = os.path.join(root, n)
+            if os.path.isfile(fp) and not os.path.islink(fp):
+                total += os.stat(fp).st_size
+    return total
+
+
+def _remote_tree_size(settings, rel, run):
+    # -H follows a symlinked extra path itself, as os.path does on the head.
+    p = _remote(settings, ["find", "-H", f"{settings.llm_root}/{rel}", "-type", "f",
+                           "-printf", "%s\\n"], run)
+    if p.returncode != 0:
+        return None
+    return sum(int(x) for x in _out(p).split() if x.isdigit())
+
+
 def _tp_models(models):
     return [m for m in models if m.nodes == 2]
 
@@ -194,6 +220,15 @@ def check(settings, models, run=subprocess.run):
         rs = _remote_weights(settings, path, run)
         report(hs is not None and hs == rs, f"weights {m.name}",
                f"head={hs if hs is not None else 'missing'} worker={rs if rs is not None else 'missing'}")
+        for rel in m.extra_paths:
+            hs = _local_tree_size(settings, rel)
+            rs = _remote_tree_size(settings, rel, run)
+            if hs is None or rs is None:
+                where = " and ".join(n for n, v in (("head", hs), ("worker", rs)) if v is None)
+                report(False, f"extra {m.name} {rel}",
+                       f"missing on {where} — run sparkyard cluster sync {m.name}")
+            else:
+                report(hs == rs, f"extra {m.name} {rel}", f"head={hs} worker={rs}")
     return 0 if ok else 1
 
 
@@ -272,5 +307,29 @@ def sync(settings, models, names, run=subprocess.run, popen=subprocess.Popen):
         if r.returncode != 0:
             print(f"✗ rsync {m.name} failed")
             return 1
+        # Extra paths (e.g. a speculative-decoding draft model) the worker reads
+        # through its /models mount. A directory syncs dir/ -> dir/ like the
+        # model; a file is copied into its parent directory.
+        for rel in m.extra_paths:
+            local = f"{settings.llm_root}/{rel}"
+            if os.path.isdir(local):
+                src, dst, parent = local + "/", local + "/", os.path.dirname(local)
+            elif os.path.isfile(local):
+                parent = os.path.dirname(local)
+                src, dst = local, parent + "/"
+            else:
+                print(f"✗ {m.name} references /models/{rel}, which is missing on the head "
+                      f"({local})")
+                return 1
+            p = _remote(settings, ["mkdir", "-p", parent], run)
+            if p.returncode != 0:
+                print(f"✗ mkdir {parent} on worker failed")
+                return 1
+            print(f"→ rsync {m.name} (+{rel})")
+            r = run(["rsync", "-a", "--info=progress2", "-e", e, src,
+                     f"{w.ssh_user}@{w.cx7_ip}:{dst}"])
+            if r.returncode != 0:
+                print(f"✗ rsync {m.name} (+{rel}) failed")
+                return 1
     print("✓ sync complete")
     return 0

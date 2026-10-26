@@ -265,6 +265,18 @@ is used like any other; the worker's `docker logs` appear in llama-swap's log as
   ${PID}`) instead of sending SIGTERM. `--stop` SIGTERMs the launcher first, so a
   load still in preflight/sizing aborts before it starts any container, then
   stops the worker and head containers.
+- **Extra paths (draft models):** any other `/models/...` path in the model's
+  `vllm_flags`, `extra_docker_args` or `pre_launch_cmd`, such as a dspark draft
+  in `--speculative-config`, is synced by `cluster sync`, compared by `cluster
+  check` and required on the worker by the launch preflight. No extra setup
+  is needed. Chat templates are skipped because only the head reads them.
+- **Worker death is detected within seconds:** the head polls the worker
+  container about every 5 s and stops itself if the worker has exited, instead
+  of waiting out the ~10 min torch.distributed timeout. The worker's own
+  `[worker] ...` log lines say why it died.
+- **No `gmem.override`:** validation rejects it on `nodes: 2` models. It skips
+  the sizing of both nodes, and that sizing (the smaller of the two nodes'
+  plans) is what keeps the worker within its memory. Use `gmem.min`/`gmem.max`.
 - `vllm_flags` must not set `-tp`/`--tensor-parallel-size`,
   `-pp`/`--pipeline-parallel-size`, `--nnodes`, `--node-rank`,
   `--master-addr`/`--master-port`, `--headless` or

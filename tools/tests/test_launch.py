@@ -867,7 +867,7 @@ def _cluster_main_env(tmp_path, monkeypatch, **extra):
     vals.update(extra)
     for k, v in vals.items():
         monkeypatch.setenv(k, v)
-    for k in ("GMEM_OVERRIDE", "RECLAIM_CONTAINERS", "SPARKYARD_LAUNCH_PRINT"):
+    for k in ("GMEM_OVERRIDE", "RECLAIM_CONTAINERS", "SPARKYARD_LAUNCH_PRINT", "EXTRA_PATHS"):
         if k not in extra:
             monkeypatch.delenv(k, raising=False)
 
@@ -1332,3 +1332,244 @@ def test_main_cluster_passes_logs_argv(tmp_path, monkeypatch):
         launch.main(["--served-model-name", "big"])
     assert got["logs_argv"][0] == "ssh" and got["logs_argv"][-1] == "docker logs -f big-5800-w"
     assert got["state"]["sig"] is None
+
+
+# --- extra paths (draft models) in cluster preflight ---
+
+def test_parse_extra_paths():
+    assert launch.parse_extra_paths(None) == []
+    assert launch.parse_extra_paths("") == []
+    assert launch.parse_extra_paths("vllm/Org/Big-DSpark,vllm/x/f.json") == [
+        "vllm/Org/Big-DSpark", "vllm/x/f.json"]
+
+
+@pytest.mark.parametrize("bad", ["../etc", "/etc/passwd", "a/../b", "a/..", "a b", "a;b",
+                                 "a/$(x)", "-rf", "a//b"])
+def test_parse_extra_paths_rejects_unsafe(bad, capsys):
+    with pytest.raises(SystemExit) as e:
+        launch.parse_extra_paths(bad)
+    assert e.value.code != 0
+    assert "EXTRA_PATHS" in capsys.readouterr().err
+
+
+def test_preflight_tests_extra_paths_on_worker():
+    run = _Run([("docker image inspect", (0, "sha256:aaa\n", ""))])
+    launch.cluster_preflight(_cl(), _big_env(), "/data/LLMs/", run=run, model="big",
+                             extra_paths=["vllm/Org/Big-DSpark", "vllm/x/f.json"])
+    j = run.joined()
+    cfg = next(i for i, c in enumerate(run.calls) if c[-1].startswith("test -f"))
+    tests = [c for c in run.calls if c[-1].startswith("test -e")]
+    assert [c[-1] for c in tests] == ["test -e /data/LLMs/vllm/Org/Big-DSpark",
+                                      "test -e /data/LLMs/vllm/x/f.json"]
+    assert all(c[:2] == ["ssh", "-i"] for c in tests)
+    assert run.calls.index(tests[0]) > cfg
+    assert j[-1].endswith("docker rm -f big-5800-w")
+
+
+def test_preflight_missing_extra_path_fatal(capsys):
+    run = _Run([("test -e /data/LLMs/vllm/Org/Big-DSpark", (1, "", "")),
+                ("docker image inspect", (0, "sha256:aaa\n", ""))])
+    with pytest.raises(SystemExit) as e:
+        launch.cluster_preflight(_cl(), _big_env(), "/data/LLMs", run=run, model="big",
+                                 extra_paths=["vllm/Org/Big-DSpark"])
+    assert e.value.code != 0
+    err = capsys.readouterr().err
+    assert ("[cluster] FATAL: worker spark-2 is missing /data/LLMs/vllm/Org/Big-DSpark "
+            "(referenced by this model's flags) — run sparkyard cluster sync big") in err
+    assert not any("docker rm" in j for j in run.joined())
+
+
+def test_main_cluster_preflights_extra_paths_from_env(tmp_path, monkeypatch, capsys):
+    _cluster_main_env(tmp_path, monkeypatch, EXTRA_PATHS="vllm/Org/Big-DSpark")
+    run = _Run([("docker image inspect", (0, "sha256:aaa\n", "")),
+                ("cat /proc/meminfo", (0, _MEMINFO_ROOMY, ""))])
+    monkeypatch.setattr(launch, "_run", run)
+    launch.main(["--print", "--served-model-name", "big"])
+    assert any(c[-1] == "test -e /data/LLMs/vllm/Org/Big-DSpark" for c in run.calls)
+
+
+def test_main_cluster_rejects_bad_extra_paths(tmp_path, monkeypatch, capsys):
+    _cluster_main_env(tmp_path, monkeypatch, EXTRA_PATHS="../../etc")
+    run = _Run()
+    monkeypatch.setattr(launch, "_run", run)
+    with pytest.raises(SystemExit):
+        launch.main(["--print", "--served-model-name", "big"])
+    assert run.calls == []
+
+
+# --- worker death while the head runs ---
+
+import subprocess as _subprocess  # noqa: E402
+
+_POLL = ["ssh", "w", "--", "docker container inspect -f '{{.State.Running}}' x-w"]
+_STOP = ["ssh", "w", "--", "docker stop x-w"]
+
+
+class _PollProc:
+    """Head proc whose wait(timeout) times out until it is signalled or has
+    been waited on `exit_after` times."""
+    def __init__(self, rc=0, exit_after=None):
+        self.rc, self.exit_after = rc, exit_after
+        self.returncode = None
+        self.signals, self.waits = [], []
+
+    def send_signal(self, sig):
+        self.signals.append(sig)
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        if self.signals:
+            self.returncode = -self.signals[0]
+            return self.returncode
+        if self.exit_after is not None and len(self.waits) >= self.exit_after:
+            self.returncode = self.rc
+            return self.rc
+        if timeout is None:
+            raise AssertionError("blocking wait on a head that never exits")
+        raise _subprocess.TimeoutExpired("head", timeout)
+
+
+class _SeqRun(_Run):
+    """Like _Run, but the worker poll returns `polls` in order (then alive)."""
+    def __init__(self, polls):
+        super().__init__()
+        self.polls = list(polls)
+
+    def __call__(self, argv):
+        if "container inspect -f" in " ".join(argv):
+            self.calls.append(list(argv))
+            return self.polls.pop(0) if self.polls else (0, "true\n", "")
+        return super().__call__(argv)
+
+
+def _cluster_with_poll(proc, run, sig=None):
+    sig = sig or _fake_signal()[0]
+    return launch.run_cluster(["docker", "run", "head"], ["ssh", "w", "--", "docker run -d x"],
+                              _STOP, run=run, popen=lambda a: proc, signal_mod=sig,
+                              poll_argv=_POLL, poll_interval=0.01, worker_name="x-w")
+
+
+def test_run_cluster_worker_gone_stops_head(capsys):
+    proc = _PollProc()
+    run = _SeqRun([(0, "true\n", ""), (1, "", "Error: No such object: x-w\n")])
+    rc = _cluster_with_poll(proc, run)
+    assert rc != 0
+    assert proc.signals == [_signal.SIGTERM]
+    assert run.calls[-1] == _STOP
+    assert "[cluster] worker x-w exited before/while serving — stopping head" in \
+        capsys.readouterr().err
+    assert all(t == 0.01 for t in proc.waits[:-1])
+
+
+def test_run_cluster_worker_not_running_stops_head():
+    proc = _PollProc()
+    rc = _cluster_with_poll(proc, _SeqRun([(0, "false\n", "")]))
+    assert rc != 0 and proc.signals == [_signal.SIGTERM]
+
+
+def test_run_cluster_transient_ssh_failures_are_not_death(capsys):
+    proc = _PollProc(rc=0, exit_after=8)
+    polls = [(255, "", "timeout"), (255, "", "timeout"), (0, "true\n", ""),
+             (255, "", "timeout"), (255, "", "timeout")]
+    rc = _cluster_with_poll(proc, _SeqRun(polls))
+    assert rc == 0 and proc.signals == []
+    assert "stopping head" not in capsys.readouterr().err
+
+
+def test_run_cluster_three_ssh_failures_in_a_row_is_death(capsys):
+    proc = _PollProc()
+    rc = _cluster_with_poll(proc, _SeqRun([(255, "", "t")] * 3))
+    assert rc != 0 and proc.signals == [_signal.SIGTERM]
+    assert "stopping head" in capsys.readouterr().err
+
+
+def test_run_cluster_poller_survives_runner_oserror():
+    proc = _PollProc(rc=0, exit_after=4)
+
+    class _R(_SeqRun):
+        def __call__(self, argv):
+            if "container inspect -f" in " ".join(argv) and not self.calls:
+                self.calls.append(list(argv))
+                raise OSError("ssh vanished")
+            return super().__call__(argv)
+    assert _cluster_with_poll(proc, _R([])) == 0 and proc.signals == []
+
+
+def test_run_cluster_head_exit_while_polling_returns_head_code():
+    proc = _PollProc(rc=5, exit_after=3)
+    run = _SeqRun([])
+    assert _cluster_with_poll(proc, run) == 5
+    assert run.calls[-1] == _STOP
+
+
+def test_run_cluster_no_death_poll_after_signal(capsys):
+    sig, handlers = _fake_signal()
+    proc = _PollProc()
+    calls = {"n": 0}
+
+    class _R(_SeqRun):
+        def __call__(self, argv):
+            if "container inspect -f" in " ".join(argv):
+                calls["n"] += 1
+                # llama-swap stops the model: launcher gets SIGTERM (forwarded to
+                # the head), cmdStop removes the worker.
+                handlers[_signal.SIGTERM](_signal.SIGTERM, None)
+                self.calls.append(list(argv))
+                return (1, "", "Error: No such object: x-w")
+            return super().__call__(argv)
+    rc = _cluster_with_poll(proc, _R([]), sig=sig)
+    assert rc == 128 + _signal.SIGTERM
+    assert proc.signals == [_signal.SIGTERM]   # forwarded once, not re-sent
+    assert "stopping head" not in capsys.readouterr().err
+
+
+def test_main_cluster_passes_poll_argv(tmp_path, monkeypatch):
+    _cluster_main_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(launch, "signal", types.SimpleNamespace(
+        SIGTERM=_signal.SIGTERM, SIGINT=_signal.SIGINT, getsignal=lambda s: None,
+        signal=lambda s, h: None))
+    run = _Run([("docker image inspect", (0, "sha256:aaa\n", "")),
+                ("cat /proc/meminfo", (0, _MEMINFO_ROOMY, ""))])
+    monkeypatch.setattr(launch, "_run", run)
+    got = {}
+    monkeypatch.setattr(launch, "run_cluster", lambda *a, **k: got.update(k) or 0)
+    with pytest.raises(SystemExit):
+        launch.main(["--served-model-name", "big"])
+    assert got["poll_argv"][0] == "ssh"
+    assert got["poll_argv"][-1] == ("docker container inspect -f '{{.State.Running}}' "
+                                    "big-5800-w")
+    assert got["worker_name"] == "big-5800-w"
+    assert got["poll_run"] is launch._run_poll
+
+
+def test_run_poll_timeout_reads_as_ssh_failure(monkeypatch):
+    def boom(*a, **k):
+        assert k["timeout"] == 15
+        raise _subprocess.TimeoutExpired("ssh", 15)
+    monkeypatch.setattr(launch.subprocess, "run", boom)
+    assert launch._run_poll(["ssh"])[0] == 255
+
+
+@pytest.mark.parametrize("res,want", [
+    ((0, "true\n", ""), "alive"),
+    ((0, "Welcome to DGX OS\ntrue\n", ""), "alive"),   # shell noise before the answer
+    ((0, "false\n", ""), "gone"),
+    ((0, "motd\nfalse\n", ""), "gone"),
+    ((0, "", ""), "unknown"),
+    ((0, "garbage\n", ""), "unknown"),
+    ((1, "", "Error: No such object: x-w"), "gone"),
+    ((1, "", "Error response from daemon: No such container: x-w"), "gone"),
+    ((1, "", "permission denied"), "unknown"),
+    ((255, "", "Connection timed out"), "unknown"),
+])
+def test_worker_status_table(res, want):
+    assert launch._worker_status(lambda a: res, ["ssh"]) == want
+
+
+def test_run_cluster_garbage_poll_output_counts_as_miss_not_death(capsys):
+    proc = _PollProc(rc=0, exit_after=4)
+    rc = _cluster_with_poll(proc, _SeqRun([(0, "garbage\n", ""), (0, "", "")]))
+    assert rc == 0 and proc.signals == []
+    proc = _PollProc()
+    rc = _cluster_with_poll(proc, _SeqRun([(0, "garbage\n", "")] * 3))
+    assert rc != 0 and proc.signals == [_signal.SIGTERM]

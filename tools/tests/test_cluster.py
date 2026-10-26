@@ -51,10 +51,12 @@ class Fake:
         return self.default
 
 
-def _healthy_rules(img_head="sha256:aa", img_worker="sha256:aa", worker_sizes="100\n50\n"):
+def _healthy_rules(img_head="sha256:aa", img_worker="sha256:aa", worker_sizes="100\n50\n",
+                   extra=None):
     def inspect(argv):
         return _cp(0, img_worker if argv[0] == "ssh" else img_head)
-    return [
+    # `find <p> -type f -printf` is the extra-path size probe; default: 30+5 bytes.
+    return [("-type f", extra if extra is not None else _cp(0, "30\n5\n")),
         ("docker info --format {{.ServerVersion}}", _cp(0, "27.0")),
         ("{{json .Runtimes}}", _cp(0, '{"nvidia":{},"runc":{}}')),
         ("docker image inspect", inspect),
@@ -65,12 +67,20 @@ def _healthy_rules(img_head="sha256:aa", img_worker="sha256:aa", worker_sizes="1
     ]
 
 
-def _make_weights(s, sizes=(100, 50)):
+def _make_weights(s, sizes=(100, 50), draft=(30, 5)):
     d = os.path.join(s.llm_root, "vllm/Org/Big")
     os.makedirs(d)
     for i, n in enumerate(sizes):
         with open(os.path.join(d, f"m{i}.safetensors"), "wb") as f:
             f.write(b"x" * n)
+    if draft is not None:
+        # The fixture's speculative-config draft: a dir with a nested file.
+        dd = os.path.join(s.llm_root, "vllm/Org/Big-DSpark")
+        os.makedirs(os.path.join(dd, "sub"))
+        with open(os.path.join(dd, "config.json"), "wb") as f:
+            f.write(b"x" * draft[0])
+        with open(os.path.join(dd, "sub", "w.bin"), "wb") as f:
+            f.write(b"x" * draft[1])
 
 
 # --- setup-key ---
@@ -145,7 +155,7 @@ def test_check_all_pass_returns_0(tmp_path, capsys):
     for label in ("ssh", "ssh cx7", "worker rsync", "worker docker", "worker nvidia runtime", "image vllm-node:latest",
                   "iface enp1s0f0np0 head", "iface enp1s0f0np0 worker",
                   "hca rocep1s0f0 head", "hca roceP2p1s0f0 worker", "cx7 ping",
-                  "weights Big-TP2"):
+                  "weights Big-TP2", "extra Big-TP2 vllm/Org/Big-DSpark"):
         assert f"PASS  {label}" in out, label
 
 
@@ -255,6 +265,7 @@ def _popen(rcs=(0, 0)):
 
 def test_sync_skips_image_when_ids_match(tmp_path):
     s, models, _ = _settings(tmp_path)
+    _make_weights(s)  # the fixture's draft path must exist on the head
     run = Fake(_healthy_rules())
     popen = _popen()
     assert cluster.sync(s, models, [], run=run, popen=popen) == 0
@@ -263,6 +274,7 @@ def test_sync_skips_image_when_ids_match(tmp_path):
 
 def test_sync_streams_image_when_ids_differ(tmp_path, capsys):
     s, models, _ = _settings(tmp_path)
+    _make_weights(s)  # the fixture's draft path must exist on the head
     run = Fake(_healthy_rules(img_worker="sha256:bb"))
     assert cluster.sync(s, models, [], run=run, popen=_popen()) == 0
     save, load = FakePopen.instances
@@ -283,6 +295,7 @@ def test_sync_image_stream_failure_returns_1(tmp_path, capsys, rcs):
 
 def test_sync_rsyncs_over_cx7_ip(tmp_path):
     s, models, _ = _settings(tmp_path)
+    _make_weights(s)  # the fixture's draft path must exist on the head
     run = Fake(_healthy_rules())
     assert cluster.sync(s, models, ["Big-TP2"], run=run, popen=_popen()) == 0
     src = f"{tmp_path}/llm/vllm/Org/Big/"
@@ -372,7 +385,106 @@ def test_check_and_sync_inspect_layers_not_id(tmp_path):
 
 def test_sync_skips_image_when_layers_same_ids_differ(tmp_path):
     s, models, _ = _settings(tmp_path)
+    _make_weights(s)  # the fixture's draft path must exist on the head
     layers = '["sha256:l1"]'
     assert cluster.sync(s, models, [], run=Fake(_store_rules(layers, layers)),
                         popen=_popen()) == 0
     assert FakePopen.instances == []
+
+
+# --- extra paths (draft models) ---
+
+def test_check_extra_path_probe_is_recursive_find(tmp_path):
+    s, models, _ = _settings(tmp_path)
+    _make_weights(s)
+    run = Fake(_healthy_rules())
+    cluster.check(s, models, run=run)
+    probe = [c for c in run.calls if "-type f" in " ".join(c)]
+    assert len(probe) == 1 and probe[0][0] == "ssh"
+    # -H: a symlinked extra path is followed, as os.path does on the head.
+    assert probe[0][-1] == f"find -H {s.llm_root}/vllm/Org/Big-DSpark -type f -printf '%s\\n'"
+
+
+def test_check_extra_path_size_mismatch_fails(tmp_path, capsys):
+    s, models, _ = _settings(tmp_path)
+    _make_weights(s)
+    assert cluster.check(s, models, run=Fake(_healthy_rules(extra=_cp(0, "30\n")))) == 1
+    out = capsys.readouterr().out
+    assert "FAIL  extra Big-TP2 vllm/Org/Big-DSpark  head=35 worker=30" in out
+
+
+def test_check_extra_path_missing_on_worker(tmp_path, capsys):
+    s, models, _ = _settings(tmp_path)
+    _make_weights(s)
+    rules = _healthy_rules(extra=_cp(1, "", "find: No such file or directory"))
+    assert cluster.check(s, models, run=Fake(rules)) == 1
+    line = [ln for ln in capsys.readouterr().out.splitlines() if "extra Big-TP2" in ln][0]
+    assert line.startswith("FAIL") and "missing on worker" in line
+    assert "sparkyard cluster sync Big-TP2" in line
+
+
+def test_check_extra_path_missing_on_head(tmp_path, capsys):
+    s, models, _ = _settings(tmp_path)
+    _make_weights(s, draft=None)
+    assert cluster.check(s, models, run=Fake(_healthy_rules())) == 1
+    line = [ln for ln in capsys.readouterr().out.splitlines() if "extra Big-TP2" in ln][0]
+    assert line.startswith("FAIL") and "missing on head" in line
+
+
+def test_check_extra_file_size(tmp_path, capsys):
+    s, models, _ = _settings(tmp_path)
+    _make_weights(s, draft=None)
+    models[0].raw["vllm_flags"] = ["--x /models/vllm/Org/d.json"]
+    with open(os.path.join(s.llm_root, "vllm/Org/d.json"), "wb") as f:
+        f.write(b"x" * 7)
+    assert cluster.check(s, models, run=Fake(_healthy_rules(extra=_cp(0, "7\n")))) == 0
+    assert "PASS  extra Big-TP2 vllm/Org/d.json" in capsys.readouterr().out
+
+
+def test_sync_rsyncs_extra_dir(tmp_path, capsys):
+    s, models, _ = _settings(tmp_path)
+    _make_weights(s)
+    run = Fake(_healthy_rules())
+    assert cluster.sync(s, models, ["Big-TP2"], run=run, popen=_popen()) == 0
+    rs = [c for c in run.calls if c[0] == "rsync"]
+    assert len(rs) == 2
+    src = f"{s.llm_root}/vllm/Org/Big-DSpark/"
+    assert rs[1][:3] == ["rsync", "-a", "--info=progress2"]
+    assert rs[1][-2:] == [src, f"acme@192.168.100.11:{src}"]
+    assert rs[1][rs[1].index("-e") + 1] == rs[0][rs[0].index("-e") + 1]
+    mks = [c[-1] for c in run.calls if c[0] == "ssh" and "mkdir" in c[-1]]
+    assert mks[-1] == f"mkdir -p {s.llm_root}/vllm/Org"
+    out = capsys.readouterr().out
+    assert "→ rsync Big-TP2\n" in out and "→ rsync Big-TP2 (+vllm/Org/Big-DSpark)" in out
+
+
+def test_sync_rsyncs_extra_file_into_parent(tmp_path):
+    s, models, _ = _settings(tmp_path)
+    _make_weights(s, draft=None)
+    models[0].raw["vllm_flags"] = ["--x /models/vllm/Other/sub/d.json"]
+    os.makedirs(os.path.join(s.llm_root, "vllm/Other/sub"))
+    open(os.path.join(s.llm_root, "vllm/Other/sub/d.json"), "w").write("{}")
+    run = Fake(_healthy_rules())
+    assert cluster.sync(s, models, ["Big-TP2"], run=run, popen=_popen()) == 0
+    rs = [c for c in run.calls if c[0] == "rsync"][1]
+    assert rs[-2:] == [f"{s.llm_root}/vllm/Other/sub/d.json",
+                       f"acme@192.168.100.11:{s.llm_root}/vllm/Other/sub/"]
+    mks = [c[-1] for c in run.calls if c[0] == "ssh" and "mkdir" in c[-1]]
+    assert mks[-1] == f"mkdir -p {s.llm_root}/vllm/Other/sub"
+
+
+def test_sync_extra_path_missing_on_head_fails(tmp_path, capsys):
+    s, models, _ = _settings(tmp_path)
+    _make_weights(s, draft=None)
+    run = Fake(_healthy_rules())
+    assert cluster.sync(s, models, ["Big-TP2"], run=run, popen=_popen()) == 1
+    assert "vllm/Org/Big-DSpark" in capsys.readouterr().out
+    assert len([c for c in run.calls if c[0] == "rsync"]) == 1
+
+
+def test_sync_extra_rsync_failure_returns_1(tmp_path, capsys):
+    s, models, _ = _settings(tmp_path)
+    _make_weights(s)
+    run = Fake([("Big-DSpark/ acme@", _cp(23))] + _healthy_rules())
+    assert cluster.sync(s, models, ["Big-TP2"], run=run, popen=_popen()) == 1
+    assert "✗ rsync Big-TP2 (+vllm/Org/Big-DSpark) failed" in capsys.readouterr().out

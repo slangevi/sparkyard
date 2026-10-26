@@ -369,3 +369,16 @@ def test_single_node_has_no_proxy_or_nodes():
     out = _render()
     assert "proxy:" not in out
     assert "NODES=" not in out
+
+
+def test_cluster_extra_paths_in_cmd_not_cmdstop():
+    out = _render_cluster()
+    cmd, stop = out.split("Big-TP2:", 1)[1].split("cmdStop:", 1)
+    assert "EXTRA_PATHS=vllm/Org/Big-DSpark" in cmd
+    assert "EXTRA_PATHS" not in stop.split("\n", 1)[0]
+
+
+def test_cluster_no_extra_paths_line_when_none():
+    settings, models, groups = load(CLUSTER_MODELS, CLUSTER_SETTINGS)
+    models[0].raw["vllm_flags"] = ["--trust-remote-code"]
+    assert "EXTRA_PATHS" not in render_llama_swap(models, groups, settings.cluster)

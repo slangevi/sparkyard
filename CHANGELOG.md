@@ -9,6 +9,8 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-25
+
 ### Added
 
 - **Two-node tensor-parallel vLLM over ConnectX-7.** A model with `nodes: 2`
@@ -25,7 +27,6 @@ the prior work that inspired it.
   link ping and weights; `sync` streams the image and rsyncs weights to the
   worker. The llama-swap image now includes ssh and rsync. See the README's
   "Two-node (CX7) cluster" section.
-
 - **`reclaim_containers` per model.** A co-tenant that caches models in unified
   memory (an image/video server, say) can leave a vLLM model below its
   `gmem.min` floor, and the load then fails with `upstream command exited
@@ -66,7 +67,6 @@ the prior work that inspired it.
 - **`gmem.override` on a `nodes: 2` model is now a validation error.** It
   bypasses the per-node sizing (neither node's free memory is checked), so set
   `gmem.min`/`gmem.max` instead.
-
 - **Claude Code's effort setting never reached the model.** Since `/v1/messages`
   goes through chat completions (below), Claude Code's `effortLevel` arrives as
   `reasoning_effort` — and `drop_params` strips that for an `openai/` deployment
@@ -76,7 +76,6 @@ the prior work that inspired it.
   block sets `supports_reasoning: false`, `mode: embedding`, or its own
   `allowed_openai_params`. Check it by asking the model to quote its system
   prompt's effort line, or compare prompt token counts per effort.
-
 - **Claude Code runs died the first time the agent read an image it had
   generated.** LiteLLM bridges Anthropic `/v1/messages` for `openai/`
   deployments through the OpenAI Responses API, and its adapter emits
@@ -492,6 +491,9 @@ NVIDIA DGX Spark (GB10).
   engines bind `127.0.0.1` and Postgres has no host port. Service healthchecks +
   `service_healthy` startup ordering.
 
+[Unreleased]: https://github.com/slangevi/sparkyard/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.10.0
+[1.9.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.9.0
 [1.8.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.8.0
 [1.7.1]: https://github.com/slangevi/sparkyard/releases/tag/v1.7.1
 [1.7.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.7.0

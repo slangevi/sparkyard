@@ -19,25 +19,45 @@ reproducible from this repo.
 
 ## Pinned refs
 
-### `vllm-node:latest` — built 2026-08-23 (`--use-wheels`)
+### `vllm-node:latest` — built 2026-10-26 (from source)
 
 | Component  | Git commit  | Built artifact |
 |------------|-------------|----------------|
-| vLLM       | `040700aaa` | `vllm-0.26.1rc1.dev1105+g040700aaa.d20260822-cp312-cp312-linux_aarch64.whl` |
-| FlashInfer | (wheel)     | `flashinfer_cubin-0.6.18`, `flashinfer_jit_cache-0.6.18-cp39-abi3-manylinux_2_28_aarch64`, `flashinfer_python-0.6.18` |
+| vLLM       | `5df63a720` | v0.32.0 tag; reports `0.32.1.dev0+g5df63a720.d20261026` (the build clone has no tags, so setuptools-scm cannot see `v0.32.0`) |
+| FlashInfer | `946200de1` | v0.7.0.post1 tag, `flashinfer-python 0.7.0.post1` (built with cubins) |
 | PyTorch    | —           | `2.13.0+cu130` |
-| Transformers | —         | `5.15.1` |
+| Transformers | —         | `5.19.0` |
 
-Built from published wheels rather than from source, so the vLLM ref above is the
-commit the wheel was produced from, not one this repo compiled. A source build at
-that ref uses the same upstream source but is not bit-identical.
+Built from source with
+`./build-and-copy.sh -j 8 --vllm-ref 5df63a720 --flashinfer-ref v0.7.0.post1`
+(spark-vllm-docker `0bdc9c94`). `-j 8` keeps peak RAM bounded; the default 16
+jobs exhausted memory on the FlashInfer stage. Total build time about 1 h 51 min.
+`sparkyard vllm-node` does not pass `--flashinfer-ref` (the clone defaults to
+FlashInfer `main`), so run the command above inside the clone to reproduce this
+image exactly.
+
+**Known issue: Gemma-4-26B-A4B-NVFP4 is pinned to `vllm-node:rollback-040700aaa`.**
+On this image, vLLM's startup memory profiling of Gemma's vision encoder
+(eager HF SDPA) pushes host memory far past the 0.28 gmem plan. Available RAM
+fell from about 91 GiB to 9–15 GiB, and an unguarded load OOM-hung the box on
+2026-10-26. The old image runs the same step with the same settings (16
+max-size dummy images, 32768-token budget) and bottoms out at 53 GiB available,
+so 0.32 uses about 40 GiB more there. The image count is not the cause, and
+setting `video: 0` or `--max-num-batched-tokens 8192` did not help. No upstream
+fix exists as of 2026-10-27. The pin is in the gitignored `models.yaml` (Gemma's
+`image:`); retest on the next vllm-node update and drop the pin if it passes.
+All the other on-disk vLLM models pass a smoke load on this image, including a
+double load of Qwen3-Coder-Next.
+
+Previous image (vLLM `040700aaa`, FlashInfer 0.6.18, `--use-wheels`, 2026-08-23)
+is kept as `vllm-node:rollback-040700aaa` on both nodes.
 
 ## Reproduce
 
 The one-command path (clones the repo, checks out the pinned ref, builds):
 
-From prebuilt wheels (minutes, and the wheel set is already dependency-resolved —
-this is how `vllm-node:latest` above was produced):
+From prebuilt wheels (minutes, and the wheel set is already dependency-resolved;
+the wheel set picks its own vLLM build, so it will not match the pinned ref):
 
 ```bash
 sparkyard vllm-node --variant base --use-wheels
@@ -51,11 +71,11 @@ make vllm-node VARIANT=mxfp4   # vllm-node-mxfp4:latest (tracks its own ref)
 make vllm-node VLLMARGS="--print"   # dry-run the plan
 ```
 
-The pin lives in `settings.local.yaml` (`vllm.vllm_ref`, default `7852e50e4`);
+The pin lives in `settings.local.yaml` (`vllm.vllm_ref`, default `5df63a720`);
 this file mirrors it. Under the hood `make vllm-node` runs, inside the clone:
 
 ```bash
-./build-and-copy.sh --vllm-ref 7852e50e4          # -> vllm-node:latest
+./build-and-copy.sh --vllm-ref 5df63a720          # -> vllm-node:latest
 ./build-and-copy.sh --exp-mxfp4                    # -> vllm-node-mxfp4:latest (GPT-OSS-120B)
 ```
 

@@ -16,8 +16,8 @@ RUN cd /usr/local/cuda/targets/sbsa-linux/lib/stubs && ln -sf libcuda.so libcuda
 ENV LIBRARY_PATH=/usr/local/cuda/targets/sbsa-linux/lib/stubs:$LIBRARY_PATH
 
 WORKDIR /app
-# llama.cpp pinned 2026-08-23; bump via `sparkyard update llama-cpp`
-ARG LLAMA_CPP_REF=c060ca974c773c7c3d17fd1b66dc9d312bc292c0
+# llama.cpp pinned 2026-10-26; bump via `sparkyard update llama-cpp`
+ARG LLAMA_CPP_REF=69b3cc406ea5e8c5cd893c37beb6d9cc8505fb8e
 RUN git clone https://github.com/ggml-org/llama.cpp src \
  && git -C src checkout ${LLAMA_CPP_REF}
 

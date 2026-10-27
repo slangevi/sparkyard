@@ -36,16 +36,18 @@ jobs exhausted memory on the FlashInfer stage. Total build time about 1 h 51 min
 FlashInfer `main`), so run the command above inside the clone to reproduce this
 image exactly.
 
-**Known issue: Gemma-4-26B-A4B-NVFP4 does not load on this image.** While
-sizing memory at startup, vLLM 0.32 runs Gemma's eager-SDPA vision encoder on
-16 max-size dummy images (`max_num_seqs` × image limit). That pushes host
-memory far past the 0.28 gmem plan: available RAM fell from about 91 GiB to
-9–15 GiB, and an unguarded load OOM-hung the box on 2026-10-26. Setting
-`video: 0` and `--max-num-batched-tokens 8192` did not help. No upstream fix
-exists as of 2026-10-27. Until there is one, pin Gemma's `image:` to
-`vllm-node:rollback-040700aaa`, or try `--skip-mm-profiling` under a memory
-watchdog. All the other on-disk vLLM models pass a smoke load on this image,
-including a double load of Qwen3-Coder-Next.
+**Known issue: Gemma-4-26B-A4B-NVFP4 is pinned to `vllm-node:rollback-040700aaa`.**
+On this image, vLLM's startup memory profiling of Gemma's vision encoder
+(eager HF SDPA) pushes host memory far past the 0.28 gmem plan. Available RAM
+fell from about 91 GiB to 9–15 GiB, and an unguarded load OOM-hung the box on
+2026-10-26. The old image runs the same step with the same settings (16
+max-size dummy images, 32768-token budget) and bottoms out at 53 GiB available,
+so 0.32 uses about 40 GiB more there. The image count is not the cause, and
+setting `video: 0` or `--max-num-batched-tokens 8192` did not help. No upstream
+fix exists as of 2026-10-27. The pin is in the gitignored `models.yaml` (Gemma's
+`image:`); retest on the next vllm-node update and drop the pin if it passes.
+All the other on-disk vLLM models pass a smoke load on this image, including a
+double load of Qwen3-Coder-Next.
 
 Previous image (vLLM `040700aaa`, FlashInfer 0.6.18, `--use-wheels`, 2026-08-23)
 is kept as `vllm-node:rollback-040700aaa` on both nodes.

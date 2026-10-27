@@ -10,7 +10,7 @@ from .placeholders import resolve
 # partial one). The ref mirrors vllm/VLLM_NODE_PROVENANCE.md; bump both together.
 DEFAULT_VLLM_UPSTREAM = "https://github.com/eugr/spark-vllm-docker"
 DEFAULT_VLLM_CLONE_PATH = "{repo_path}/vllm/build/spark-vllm-docker"
-DEFAULT_VLLM_REF = "040700aaa"
+DEFAULT_VLLM_REF = "5df63a720"
 
 
 @dataclass

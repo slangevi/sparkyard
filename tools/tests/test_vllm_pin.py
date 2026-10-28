@@ -124,3 +124,19 @@ def test_rewrite_provenance_raises_when_table_missing():
     with pytest.raises(vllm_pin.UpdateError):
         vllm_pin.rewrite_provenance("no table here\n",
                                     vllm_pin.BuiltRefs("a", "b", "w", "2026-07-01"))
+
+
+def test_rewrite_provenance_accepts_the_committed_file():
+    # Regression: a hand edit of VLLM_NODE_PROVENANCE.md (2026-10) dropped the
+    # "(built YYYY-MM-DD)" and backticked-artifact anchors, so `update vllm-node`
+    # would have failed at the pin step. The real file must stay rewritable, and
+    # the FlashInfer pin must not be clobbered by the vLLM `default` rewrite.
+    import os
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "vllm", "VLLM_NODE_PROVENANCE.md")
+    with open(path) as f:
+        text = f.read()
+    out = vllm_pin.rewrite_provenance(
+        text, vllm_pin.BuiltRefs("NEWSHA", "FISHA", "vllm-x.whl", "2027-01-01"))
+    assert "(built 2027-01-01)" in out
+    assert "| `NEWSHA` | `vllm-x.whl` |" in out
+    assert "`vllm.flashinfer_ref` (`v0.7.0.post1` unless overridden" in out

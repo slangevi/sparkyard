@@ -24,12 +24,14 @@ _REF_VARIANTS = {
 }
 
 
-def build_plan(cfg, variants, ref, clone_exists, use_wheels=False):
+def build_plan(cfg, variants, ref, clone_exists, use_wheels=False, flashinfer_ref=""):
     """Return the ordered Steps to build `variants`. Pure: no git/docker/fs calls.
 
     cfg: VllmBuild (upstream, clone_path, vllm_ref). clone_exists: bool.
     use_wheels: build only the runner from prebuilt, pre-resolved wheels
-    (minutes instead of ~30; never falls back to compiling)."""
+    (minutes instead of ~30; never falls back to compiling).
+    flashinfer_ref: FlashInfer commit/branch/tag for source builds; "" leaves
+    build-and-copy.sh on its default (main)."""
     steps = []
     if clone_exists:
         steps.append(Step("fetch upstream", cfg.clone_path, ["git", "fetch"]))
@@ -54,6 +56,11 @@ def build_plan(cfg, variants, ref, clone_exists, use_wheels=False):
             argv = ["./build-and-copy.sh", "--exp-mxfp4"]
         else:
             argv = ["./build-and-copy.sh", *_REF_VARIANTS[v], "--vllm-ref", ref]
+            # Source builds only: build-and-copy.sh rejects --flashinfer-ref with
+            # --exp-mxfp4, and with --use-wheels it would force a custom FlashInfer
+            # source build — the opposite of what the wheel path is for.
+            if flashinfer_ref and not use_wheels:
+                argv += ["--flashinfer-ref", flashinfer_ref]
         if use_wheels:
             argv.append("--use-wheels")
         steps.append(Step(f"build {v}", cfg.clone_path, argv))
@@ -75,12 +82,15 @@ def run(args, settings, exists=os.path.exists, which=shutil.which, exec_step=Non
     cfg = settings.vllm
     variants = [args.variant] if args.variant else list(DEFAULT_VARIANTS)
     ref = args.vllm_ref or cfg.vllm_ref
+    fi_ref = getattr(args, "flashinfer_ref", None) or cfg.flashinfer_ref
+    use_wheels = getattr(args, "use_wheels", False)
     clone_exists = exists(os.path.join(cfg.clone_path, ".git"))
     plan = build_plan(cfg, variants, ref, clone_exists,
-                      use_wheels=getattr(args, "use_wheels", False))
+                      use_wheels=use_wheels, flashinfer_ref=fi_ref)
 
     if args.dry_run:
-        print(f"# plan: variants={variants} ref={ref} clone={cfg.clone_path}")
+        print(f"# plan: variants={variants} ref={ref} "
+              f"flashinfer_ref={fi_ref or 'main'} clone={cfg.clone_path}")
         for step in plan:
             loc = f" (in {step.cwd})" if step.cwd else ""
             print(f"  [{step.description}] {' '.join(step.argv)}{loc}")
@@ -91,8 +101,11 @@ def run(args, settings, exists=os.path.exists, which=shutil.which, exec_step=Non
             print(f"✗ '{tool}' not found on PATH — install it and retry.", file=sys.stderr)
             return 1
 
-    how = "from prebuilt wheels" if getattr(args, "use_wheels", False) else f"at ref {ref}"
-    eta = "~10 min" if getattr(args, "use_wheels", False) else "~30 min"
+    if use_wheels and getattr(args, "flashinfer_ref", None):
+        print(f"note: --flashinfer-ref {fi_ref} ignored with --use-wheels "
+              f"(the wheel set carries its own FlashInfer).")
+    how = "from prebuilt wheels" if use_wheels else f"at ref {ref}"
+    eta = "~10 min" if use_wheels else "~30 min"
     print(f"… building vLLM image(s) {', '.join(variants)} {how} — this can take {eta}.")
     for step in plan:
         rc = exec_step(step)
@@ -103,5 +116,9 @@ def run(args, settings, exists=os.path.exists, which=shutil.which, exec_step=Non
     if ref != cfg.vllm_ref:
         print(f"note: built at ref {ref} (settings pin is {cfg.vllm_ref}). "
               f"Update settings vllm_ref + vllm/VLLM_NODE_PROVENANCE.md to match.")
+    if fi_ref != cfg.flashinfer_ref and not use_wheels:
+        print(f"note: built with FlashInfer {fi_ref} (settings pin is "
+              f"{cfg.flashinfer_ref or 'main'}). Update settings flashinfer_ref + "
+              f"vllm/VLLM_NODE_PROVENANCE.md to match.")
     print(f"✓ vllm-node build complete: {', '.join(variants)}")
     return 0

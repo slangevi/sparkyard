@@ -11,6 +11,9 @@ from .placeholders import resolve
 DEFAULT_VLLM_UPSTREAM = "https://github.com/eugr/spark-vllm-docker"
 DEFAULT_VLLM_CLONE_PATH = "{repo_path}/vllm/build/spark-vllm-docker"
 DEFAULT_VLLM_REF = "5df63a720"
+# FlashInfer ref passed to source builds (build-and-copy.sh defaults to `main`).
+# "" in settings leaves it to the clone's default.
+DEFAULT_FLASHINFER_REF = "v0.7.0.post1"
 
 
 @dataclass
@@ -18,6 +21,7 @@ class VllmBuild:
     upstream: str
     clone_path: str   # placeholders already resolved (absolute)
     vllm_ref: str
+    flashinfer_ref: str = ""   # "" = build-and-copy.sh default (main)
 
 
 @dataclass
@@ -68,6 +72,7 @@ class Settings:
             clone_path=resolve(v.get("clone_path", DEFAULT_VLLM_CLONE_PATH),
                                s.placeholder_map()),
             vllm_ref=v.get("vllm_ref", DEFAULT_VLLM_REF),
+            flashinfer_ref=str(v.get("flashinfer_ref", DEFAULT_FLASHINFER_REF) or ""),
         )
         c = data.get("cluster")
         if c is not None:

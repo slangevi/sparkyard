@@ -11,7 +11,8 @@ repo_path: /home/user/sparkyard  # absolute path to this repo clone
 # vllm:
 #   upstream: https://github.com/eugr/spark-vllm-docker
 #   clone_path: "{repo_path}/vllm/build/spark-vllm-docker"   # gitignored
-#   vllm_ref: 7852e50e4
+#   vllm_ref: 5df63a720
+#   flashinfer_ref: v0.7.0.post1   # source builds only; "" = upstream default (main)
 
 # Optional — two-node tensor-parallel vLLM across two DGX Sparks (one worker).
 # Requires a direct CX7 link between the nodes. Uncomment to enable; the

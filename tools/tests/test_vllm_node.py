@@ -191,3 +191,41 @@ def test_use_wheels_applies_to_every_variant():
     builds = [a for a in _argvs(plan) if a[0] == "./build-and-copy.sh"]
     assert len(builds) == 2
     assert all("--use-wheels" in b for b in builds)
+
+
+def test_flashinfer_ref_threads_into_source_build():
+    plan = vllm_node.build_plan(CFG, ["base"], "abc1234", clone_exists=True,
+                                flashinfer_ref="v0.7.0.post1")
+    assert ["./build-and-copy.sh", "--vllm-ref", "abc1234",
+            "--flashinfer-ref", "v0.7.0.post1"] in _argvs(plan)
+
+
+def test_empty_flashinfer_ref_leaves_upstream_default():
+    argvs = _argvs(vllm_node.build_plan(CFG, ["base"], "abc1234", clone_exists=True,
+                                        flashinfer_ref=""))
+    assert not any("--flashinfer-ref" in a for a in argvs)
+
+
+def test_flashinfer_ref_skipped_for_wheels_and_mxfp4():
+    # --use-wheels: a FlashInfer ref would force a custom source build of it.
+    # --exp-mxfp4: build-and-copy.sh rejects --flashinfer-ref outright.
+    wheels = _argvs(vllm_node.build_plan(CFG, ["base"], "abc1234", clone_exists=True,
+                                         use_wheels=True, flashinfer_ref="v0.7.0.post1"))
+    mxfp4 = _argvs(vllm_node.build_plan(CFG, ["mxfp4"], "abc1234", clone_exists=True,
+                                        flashinfer_ref="v0.7.0.post1"))
+    assert not any("--flashinfer-ref" in a for a in wheels + mxfp4)
+
+
+def test_run_uses_settings_flashinfer_ref_and_cli_override(capsys):
+    cfg = VllmBuild(upstream=CFG.upstream, clone_path=CFG.clone_path,
+                    vllm_ref="abc1234", flashinfer_ref="v0.7.0.post1")
+    s = types.SimpleNamespace(vllm=cfg)
+    for override, want in ((None, "v0.7.0.post1"), ("v0.8.0", "v0.8.0")):
+        seen = []
+        args = types.SimpleNamespace(variant=None, vllm_ref=None, flashinfer_ref=override,
+                                     use_wheels=False, dry_run=False)
+        rc = vllm_node.run(args, s, exists=lambda p: True, which=lambda t: "/usr/bin/" + t,
+                           exec_step=lambda step: seen.append(step.argv) or 0)
+        assert rc == 0
+        assert ["./build-and-copy.sh", "--vllm-ref", "abc1234", "--flashinfer-ref", want] in seen
+    assert "settings pin is v0.7.0.post1" in capsys.readouterr().out  # override noted

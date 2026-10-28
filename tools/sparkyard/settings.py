@@ -14,6 +14,10 @@ DEFAULT_VLLM_REF = "5df63a720"
 # FlashInfer ref passed to source builds (build-and-copy.sh defaults to `main`).
 # "" in settings leaves it to the clone's default.
 DEFAULT_FLASHINFER_REF = "v0.7.0.post1"
+# Concurrent compile jobs (build-and-copy.sh -j). Upstream's 16 exhausted GB10
+# memory on the FlashInfer stage (2026-10); 8 kept the source build bounded.
+# 0 in settings leaves it to the clone's default.
+DEFAULT_VLLM_BUILD_JOBS = 8
 
 
 @dataclass
@@ -22,6 +26,7 @@ class VllmBuild:
     clone_path: str   # placeholders already resolved (absolute)
     vllm_ref: str
     flashinfer_ref: str = ""   # "" = build-and-copy.sh default (main)
+    build_jobs: int = 0        # 0 = build-and-copy.sh default (16)
 
 
 @dataclass
@@ -73,6 +78,7 @@ class Settings:
                                s.placeholder_map()),
             vllm_ref=v.get("vllm_ref", DEFAULT_VLLM_REF),
             flashinfer_ref=str(v.get("flashinfer_ref", DEFAULT_FLASHINFER_REF) or ""),
+            build_jobs=int(v.get("build_jobs", DEFAULT_VLLM_BUILD_JOBS) or 0),
         )
         c = data.get("cluster")
         if c is not None:

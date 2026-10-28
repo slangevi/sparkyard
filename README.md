@@ -89,6 +89,14 @@ curl http://localhost:14000/v1/chat/completions \
 | `sparkyard bench [--mode speed]` | Benchmark each served model — quality (tool-eval-bench) or speed (llama-benchy). Scope it with `MODELS="a b"`; unscoped it loads **every** model on disk in turn, which on unified memory is a real memory event, not just a slow one. Unknown names exit 2. |
 | `sparkyard cluster setup-key` / `check` / `sync [MODEL...]` | Two-node cluster: create the ssh key + pin worker host keys / preflight both nodes (exit 1 on any FAIL) / copy the image and weights of `nodes: 2` models to the worker. See [Two-node cluster](#two-node-cx7-cluster). |
 
+**Before/after an upgrade:** run `scripts/upgrade-bench.sh before <model>...` on
+the old images and `scripts/upgrade-bench.sh after <model>...` on the new ones
+(cold-load time plus llama-benchy pp512/pp8192 × tg128 at concurrency 1 and 4,
+with llama-benchy pinned and a memory watchdog that unloads below 20 GiB
+available). Then `scripts/compare-bench.py <before_dir> <after_dir>` prints a
+markdown table of the changes. Keep one model unchanged in both runs as a
+control: anything it gains comes from outside the upgraded component.
+
 **`make` aliases:** every command above also works as `make <cmd>` (e.g. `make
 render`, `make start`) for muscle memory. `make venv` (bootstrap the project venv
 + install the console script), `make test`, and `make lint` are make-only

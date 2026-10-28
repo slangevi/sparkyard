@@ -19,22 +19,25 @@ reproducible from this repo.
 
 ## Pinned refs
 
-### `vllm-node:latest` — built 2026-10-26 (from source)
+### `vllm-node:latest` — (built 2026-10-26) from source
 
 | Component  | Git commit  | Built artifact |
 |------------|-------------|----------------|
-| vLLM       | `5df63a720` | v0.32.0 tag; reports `0.32.1.dev0+g5df63a720.d20261026` (the build clone has no tags, so setuptools-scm cannot see `v0.32.0`) |
+| vLLM       | `5df63a720` | `0.32.1.dev0+g5df63a720.d20261026` |
 | FlashInfer | `946200de1` | v0.7.0.post1 tag, `flashinfer-python 0.7.0.post1` (built with cubins) |
 | PyTorch    | —           | `2.13.0+cu130` |
 | Transformers | —         | `5.19.0` |
+
+The vLLM commit is the v0.32.0 tag. The package reports `0.32.1.dev0` because
+the build clone has no tags, so setuptools-scm cannot see `v0.32.0`.
 
 Built from source with
 `./build-and-copy.sh -j 8 --vllm-ref 5df63a720 --flashinfer-ref v0.7.0.post1`
 (spark-vllm-docker `0bdc9c94`). `-j 8` keeps peak RAM bounded; the default 16
 jobs exhausted memory on the FlashInfer stage. Total build time about 1 h 51 min.
-`sparkyard vllm-node` does not pass `--flashinfer-ref` (the clone defaults to
-FlashInfer `main`), so run the command above inside the clone to reproduce this
-image exactly.
+`sparkyard vllm-node` passes the same `--vllm-ref` and `--flashinfer-ref` from
+settings, so `make vllm-node` reproduces this image. It does not pass `-j`; on
+this box, run the command above inside the clone to keep the job count at 8.
 
 **Known issue: Gemma-4-26B-A4B-NVFP4 is pinned to `vllm-node:rollback-040700aaa`.**
 On this image, vLLM's startup memory profiling of Gemma's vision encoder
@@ -71,11 +74,13 @@ make vllm-node VARIANT=mxfp4   # vllm-node-mxfp4:latest (tracks its own ref)
 make vllm-node VLLMARGS="--print"   # dry-run the plan
 ```
 
-The pin lives in `settings.local.yaml` (`vllm.vllm_ref`, default `5df63a720`);
-this file mirrors it. Under the hood `make vllm-node` runs, inside the clone:
+The pins live in `settings.local.yaml`: `vllm.vllm_ref` (default `5df63a720`)
+and `vllm.flashinfer_ref` (`v0.7.0.post1` unless overridden; source builds
+only). This file mirrors them. Under the hood `make vllm-node` runs, inside the
+clone:
 
 ```bash
-./build-and-copy.sh --vllm-ref 5df63a720          # -> vllm-node:latest
+./build-and-copy.sh --vllm-ref 5df63a720 --flashinfer-ref v0.7.0.post1   # -> vllm-node:latest
 ./build-and-copy.sh --exp-mxfp4                    # -> vllm-node-mxfp4:latest (GPT-OSS-120B)
 ```
 

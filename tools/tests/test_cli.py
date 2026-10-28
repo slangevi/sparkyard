@@ -18,6 +18,7 @@ def test_vllm_node_dispatches_with_parsed_args(monkeypatch, tmp_path):
     def fake_run(args, s, **kw):
         captured["variant"] = args.variant
         captured["vllm_ref"] = args.vllm_ref
+        captured["flashinfer_ref"] = args.flashinfer_ref
         captured["dry_run"] = args.dry_run
         captured["clone_path"] = s.vllm.clone_path
         return 0
@@ -25,9 +26,10 @@ def test_vllm_node_dispatches_with_parsed_args(monkeypatch, tmp_path):
     import sparkyard.vllm_node as vn
     monkeypatch.setattr(vn, "run", fake_run)
     rc = cli.main(["--settings", str(settings), "vllm-node",
-                   "--variant", "mxfp4", "--vllm-ref", "abc1234", "--print"])
+                   "--variant", "mxfp4", "--vllm-ref", "abc1234",
+                   "--flashinfer-ref", "v9.9", "--print"])
     assert rc == 0
-    assert captured == {"variant": "mxfp4", "vllm_ref": "abc1234",
+    assert captured == {"variant": "mxfp4", "vllm_ref": "abc1234", "flashinfer_ref": "v9.9",
                         "dry_run": True, "clone_path": "/y/vllm/build/spark-vllm-docker"}
 
 

@@ -1,5 +1,6 @@
 import os
-from sparkyard.settings import Settings, DEFAULT_VLLM_REF, DEFAULT_FLASHINFER_REF
+from sparkyard.settings import (Settings, DEFAULT_VLLM_REF, DEFAULT_FLASHINFER_REF,
+                                DEFAULT_VLLM_BUILD_JOBS)
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -37,6 +38,7 @@ def test_vllm_defaults_apply_when_block_absent():
     assert s.vllm.clone_path == "/repo/vllm/build/spark-vllm-docker"  # {repo_path} resolved
     assert s.vllm.vllm_ref == DEFAULT_VLLM_REF
     assert s.vllm.flashinfer_ref == DEFAULT_FLASHINFER_REF
+    assert s.vllm.build_jobs == DEFAULT_VLLM_BUILD_JOBS == 8
 
 
 def test_vllm_block_overrides_and_resolves_clone_path():
@@ -85,6 +87,20 @@ def test_flashinfer_ref_override_and_empty_means_upstream_default():
             """))
             path = f.name
         assert Settings.load(path).vllm.flashinfer_ref == want
+
+
+def test_build_jobs_override_and_zero_means_upstream_default():
+    import tempfile, textwrap
+    for value, want in (("4", 4), ("0", 0)):
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write(textwrap.dedent(f"""
+                llm_root: /x
+                repo_path: /repo
+                vllm:
+                  build_jobs: {value}
+            """))
+            path = f.name
+        assert Settings.load(path).vllm.build_jobs == want
 
 
 def test_cluster_absent_is_none():

@@ -24,14 +24,17 @@ _REF_VARIANTS = {
 }
 
 
-def build_plan(cfg, variants, ref, clone_exists, use_wheels=False, flashinfer_ref=""):
+def build_plan(cfg, variants, ref, clone_exists, use_wheels=False, flashinfer_ref="",
+               build_jobs=0):
     """Return the ordered Steps to build `variants`. Pure: no git/docker/fs calls.
 
     cfg: VllmBuild (upstream, clone_path, vllm_ref). clone_exists: bool.
     use_wheels: build only the runner from prebuilt, pre-resolved wheels
     (minutes instead of ~30; never falls back to compiling).
     flashinfer_ref: FlashInfer commit/branch/tag for source builds; "" leaves
-    build-and-copy.sh on its default (main)."""
+    build-and-copy.sh on its default (main).
+    build_jobs: concurrent compile jobs (-j); 0 leaves build-and-copy.sh on its
+    default (16), which can exhaust GB10 memory on a source build."""
     steps = []
     if clone_exists:
         steps.append(Step("fetch upstream", cfg.clone_path, ["git", "fetch"]))
@@ -63,6 +66,8 @@ def build_plan(cfg, variants, ref, clone_exists, use_wheels=False, flashinfer_re
                 argv += ["--flashinfer-ref", flashinfer_ref]
         if use_wheels:
             argv.append("--use-wheels")
+        if build_jobs:
+            argv += ["-j", str(build_jobs)]
         steps.append(Step(f"build {v}", cfg.clone_path, argv))
     return steps
 
@@ -84,13 +89,16 @@ def run(args, settings, exists=os.path.exists, which=shutil.which, exec_step=Non
     ref = args.vllm_ref or cfg.vllm_ref
     fi_ref = getattr(args, "flashinfer_ref", None) or cfg.flashinfer_ref
     use_wheels = getattr(args, "use_wheels", False)
+    jobs = getattr(args, "build_jobs", None)
+    jobs = cfg.build_jobs if jobs is None else jobs
     clone_exists = exists(os.path.join(cfg.clone_path, ".git"))
     plan = build_plan(cfg, variants, ref, clone_exists,
-                      use_wheels=use_wheels, flashinfer_ref=fi_ref)
+                      use_wheels=use_wheels, flashinfer_ref=fi_ref, build_jobs=jobs)
 
     if args.dry_run:
         print(f"# plan: variants={variants} ref={ref} "
-              f"flashinfer_ref={fi_ref or 'main'} clone={cfg.clone_path}")
+              f"flashinfer_ref={fi_ref or 'main'} jobs={jobs or 'default'} "
+              f"clone={cfg.clone_path}")
         for step in plan:
             loc = f" (in {step.cwd})" if step.cwd else ""
             print(f"  [{step.description}] {' '.join(step.argv)}{loc}")

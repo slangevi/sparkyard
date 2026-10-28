@@ -338,16 +338,19 @@ def download(obj, model):
 @click.option("--vllm-ref", default=None, help="Override the settings vllm_ref pin.")
 @click.option("--flashinfer-ref", default=None,
               help="Override the settings flashinfer_ref pin (source builds only).")
+@click.option("-j", "--jobs", "build_jobs", type=click.IntRange(min=0), default=None,
+              help="Concurrent build jobs (overrides settings build_jobs; 0 = upstream default).")
 @click.option("--use-wheels", is_flag=True,
               help="Build only the runner from prebuilt wheels (minutes, not ~30; "
                    "sidesteps source-build dependency conflicts).")
 @click.option("--print", "dry_run", is_flag=True,
               help="Print the resolved build plan and exit (no side effects).")
 @click.pass_obj
-def vllm_node(obj, variant, vllm_ref, flashinfer_ref, use_wheels, dry_run):
+def vllm_node(obj, variant, vllm_ref, flashinfer_ref, build_jobs, use_wheels, dry_run):
     """Clone + build the vllm-node serving image(s)."""
     return _dispatch(_ns(obj, "vllm-node", variant=variant, vllm_ref=vllm_ref,
-                         flashinfer_ref=flashinfer_ref, use_wheels=use_wheels,
+                         flashinfer_ref=flashinfer_ref, build_jobs=build_jobs,
+                         use_wheels=use_wheels,
                          dry_run=dry_run))
 
 

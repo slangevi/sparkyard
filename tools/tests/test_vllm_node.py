@@ -229,3 +229,35 @@ def test_run_uses_settings_flashinfer_ref_and_cli_override(capsys):
         assert rc == 0
         assert ["./build-and-copy.sh", "--vllm-ref", "abc1234", "--flashinfer-ref", want] in seen
     assert "settings pin is v0.7.0.post1" in capsys.readouterr().out  # override noted
+
+
+def test_build_jobs_passed_to_every_variant():
+    # -j is accepted with --use-wheels and --exp-mxfp4 too (upstream only warns
+    # when it pulls a prebuilt image), so it rides on every build step.
+    for variants, wheels in ((["base"], False), (["base"], True), (["mxfp4"], False)):
+        builds = [a for a in _argvs(vllm_node.build_plan(CFG, variants, "abc1234", True,
+                                                         use_wheels=wheels, build_jobs=8))
+                  if a[0] == "./build-and-copy.sh"]
+        assert builds and all(a[-2:] == ["-j", "8"] for a in builds)
+
+
+def test_zero_build_jobs_leaves_upstream_default():
+    argvs = _argvs(vllm_node.build_plan(CFG, ["base"], "abc1234", True, build_jobs=0))
+    assert not any("-j" in a for a in argvs)
+
+
+def test_run_cli_jobs_overrides_settings_including_zero():
+    cfg = VllmBuild(upstream=CFG.upstream, clone_path=CFG.clone_path,
+                    vllm_ref="abc1234", build_jobs=8)
+    s = types.SimpleNamespace(vllm=cfg)
+    for override, want_tail in ((None, ["-j", "8"]), (4, ["-j", "4"]), (0, None)):
+        seen = []
+        args = types.SimpleNamespace(variant=None, vllm_ref=None, build_jobs=override,
+                                     use_wheels=False, dry_run=False)
+        vllm_node.run(args, s, exists=lambda p: True, which=lambda t: "/usr/bin/" + t,
+                      exec_step=lambda step: seen.append(step.argv) or 0)
+        build = [a for a in seen if a[0] == "./build-and-copy.sh"][0]
+        if want_tail:
+            assert build[-2:] == want_tail
+        else:
+            assert "-j" not in build

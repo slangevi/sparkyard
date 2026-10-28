@@ -35,9 +35,8 @@ Built from source with
 `./build-and-copy.sh -j 8 --vllm-ref 5df63a720 --flashinfer-ref v0.7.0.post1`
 (spark-vllm-docker `0bdc9c94`). `-j 8` keeps peak RAM bounded; the default 16
 jobs exhausted memory on the FlashInfer stage. Total build time about 1 h 51 min.
-`sparkyard vllm-node` passes the same `--vllm-ref` and `--flashinfer-ref` from
-settings, so `make vllm-node` reproduces this image. It does not pass `-j`; on
-this box, run the command above inside the clone to keep the job count at 8.
+`sparkyard vllm-node` passes the same `--vllm-ref`, `--flashinfer-ref` and
+`-j 8` from settings, so `make vllm-node` reproduces this image.
 
 **Known issue: Gemma-4-26B-A4B-NVFP4 is pinned to `vllm-node:rollback-040700aaa`.**
 On this image, vLLM's startup memory profiling of Gemma's vision encoder
@@ -76,12 +75,13 @@ make vllm-node VLLMARGS="--print"   # dry-run the plan
 
 The pins live in `settings.local.yaml`: `vllm.vllm_ref` (default `5df63a720`)
 and `vllm.flashinfer_ref` (`v0.7.0.post1` unless overridden; source builds
-only). This file mirrors them. Under the hood `make vllm-node` runs, inside the
+only). This file mirrors them. `vllm.build_jobs` (8 unless overridden; 0 =
+upstream's 16) sets the compile job count. Under the hood `make vllm-node` runs, inside the
 clone:
 
 ```bash
-./build-and-copy.sh --vllm-ref 5df63a720 --flashinfer-ref v0.7.0.post1   # -> vllm-node:latest
-./build-and-copy.sh --exp-mxfp4                    # -> vllm-node-mxfp4:latest (GPT-OSS-120B)
+./build-and-copy.sh --vllm-ref 5df63a720 --flashinfer-ref v0.7.0.post1 -j 8   # -> vllm-node:latest
+./build-and-copy.sh --exp-mxfp4 -j 8               # -> vllm-node-mxfp4:latest (GPT-OSS-120B)
 ```
 
 `build-and-copy.sh` rejects `--exp-mxfp4` combined with `--vllm-ref`, so the

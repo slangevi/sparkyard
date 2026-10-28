@@ -9,6 +9,65 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-10-27
+
+Every component brought current, including vLLM 0.32.0, with a measured
+before/after comparison. `make vllm-node` now reproduces the serving image
+exactly, and before/after benchmarking is a repo script instead of a one-off.
+
+### Added
+
+- **`vllm.flashinfer_ref` setting and `sparkyard vllm-node --flashinfer-ref`.**
+  `build-and-copy.sh` builds FlashInfer from `main` unless told otherwise, so
+  `make vllm-node` could not reproduce the current image. The pin defaults to
+  `v0.7.0.post1` (`""` keeps upstream's default). It applies to source builds
+  only: upstream rejects it with `--exp-mxfp4`, and with `--use-wheels` it
+  would force a FlashInfer source build.
+- **`vllm.build_jobs` setting and `sparkyard vllm-node -j N`.** Defaults to 8.
+  Upstream's 16 compile jobs exhausted GB10 memory on the FlashInfer stage of
+  the 2026-10 source build. `0` restores upstream's default.
+- **`scripts/upgrade-bench.sh` and `scripts/compare-bench.py`.** Benchmark the
+  stack before and after an upgrade: cold-load time plus llama-benchy
+  pp512/pp8192 × tg128 at concurrency 1 and 4. llama-benchy is pinned so the
+  tool cannot change between runs, and a memory watchdog unloads the model
+  below `WATCHDOG_MIN_GIB` (20) available. `compare-bench.py` prints the
+  before/after table. See the README.
+
+### Fixed
+
+- **`VLLM_NODE_PROVENANCE.md` is rewritable again.** A hand edit dropped the
+  `(built YYYY-MM-DD)` heading and backticked-artifact anchors that
+  `sparkyard update vllm-node` rewrites when it records a new build, so that
+  step would have failed. A test now runs the rewriter against the committed
+  file.
+- `settings.example.yaml` showed a stale `vllm_ref` (`7852e50e4`).
+
+### Dependencies
+
+- **`vllm-node`** rebuilt from source: vLLM `040700aaa` → **v0.32.0**
+  (`5df63a720`), FlashInfer 0.6.18 → **v0.7.0.post1**, transformers 5.15.1 →
+  5.19.0, torch 2.13.0. The old image is kept as
+  `vllm-node:rollback-040700aaa`. Qwen3-Coder-Next now loads twice in a row
+  without deadlocking.
+- `llama-swap` v251 → **v267**; `llama-cpp` `c060ca97` → `69b3cc40`.
+- `ollama` `57d60e68` → `dea72d1e` (0.40.11); `litellm` `5ead13ed` →
+  `db36453d` (1.106.4); `litellm-db` `fe0737ba` → `a8e04259` (postgres 15.19,
+  alpine 3.24); `open-webui` `6a773e5c` → `096c8f3d` (0.12.4).
+- **Measured** with `upgrade-bench.sh` against a baseline taken before the
+  update. A control model on an unchanged image gained about 8%, so read the
+  gains net of that. llama.cpp models: prompt processing +13% to +33%,
+  generation +6% to +22%. vLLM: 8k-token prompt processing +14% to +19% on
+  Qwen3-Coder-Next and Qwen3.6-35B, short prompts and generation roughly flat
+  net of the control. Qwen3.8-27B now loads in 343 s (was 247 s).
+
+### Known issues
+
+- **Gemma-4-26B-A4B-NVFP4 does not load on vLLM 0.32.** Startup memory
+  profiling of its vision encoder uses about 40 GiB more than on the previous
+  image, and an unguarded load OOM-hung the box. Pin it to the previous image
+  with `image: vllm-node:rollback-040700aaa` in `models.yaml`. Details are in
+  `vllm/VLLM_NODE_PROVENANCE.md`.
+
 ## [1.10.0] - 2026-10-25
 
 ### Added
@@ -491,7 +550,8 @@ NVIDIA DGX Spark (GB10).
   engines bind `127.0.0.1` and Postgres has no host port. Service healthchecks +
   `service_healthy` startup ordering.
 
-[Unreleased]: https://github.com/slangevi/sparkyard/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/slangevi/sparkyard/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.11.0
 [1.10.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.10.0
 [1.9.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.9.0
 [1.8.0]: https://github.com/slangevi/sparkyard/releases/tag/v1.8.0

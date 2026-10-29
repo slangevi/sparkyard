@@ -64,6 +64,9 @@ defaults:
 #     max_model_len: 65536
 #     max_num_seqs: 4
 #     kv_dtype_bytes: 1
+#     # gmem is per node, and each node holds half the weights + KV: size the
+#     # floor from `sparkyard explain`, not from a single-node value.
+#     gmem: { min: 0.20, max: 0.60 }
 #     ready_timeout: 1800
 #     # extra_docker_args: "-e NCCL_DEBUG=INFO"   # verify NET/IB, then remove
 #     litellm:

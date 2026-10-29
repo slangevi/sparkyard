@@ -285,6 +285,15 @@ is used like any other; the worker's `docker logs` appear in llama-swap's log as
 - **No `gmem.override`:** validation rejects it on `nodes: 2` models. It skips
   the sizing of both nodes, and that sizing (the smaller of the two nodes'
   plans) is what keeps the worker within its memory. Use `gmem.min`/`gmem.max`.
+- **Re-derive `gmem` when a model moves to `nodes: 2`:** gmem is a share of
+  EACH node's memory, and at TP=2 each node holds half the weights and half
+  the KV cache. A `gmem.min` tuned on one node therefore reserves that much
+  on both: four models moved over unchanged reserved 13–26 GiB more per node
+  than they used, and one could no longer load beside ComfyUI. Run
+  `sparkyard explain <model>` and set the floor just above the per-node
+  `need`. The launcher prints `[auto-gmem] WARNING: gmem.min …` when the
+  floor, not the estimate, sets gmem and reserves `GMEM_FLOOR_WARN_GIB` (8)
+  or more beyond it.
 - `vllm_flags` must not set `-tp`/`--tensor-parallel-size`,
   `-pp`/`--pipeline-parallel-size`, `--nnodes`, `--node-rank`,
   `--master-addr`/`--master-port`, `--headless` or

@@ -34,6 +34,8 @@ Env contract (same names/defaults as the original):
             to the worker. Rank 0 runs here, rank 1 (--headless) on the worker.
             Preflight (ssh, image layers, weights on the worker; stale `-w` removed),
             then both nodes are sized at tp=2 and both get the smaller gmem.
+            GMEM_FLOOR_WARN_GIB=8: warn when GMEM_MIN, not the estimate, set
+            gmem and reserves this much per node beyond the tp=2 need.
             EXTRA_PATHS (optional, comma-separated, relative to LLM_ROOT_PATH):
             other paths the flags reference (e.g. a draft model) that preflight
             also requires on the worker.
@@ -597,6 +599,22 @@ def size_cluster(cfg_vals, params, head_mi, worker_mi):
     return min(gh, gw), mode, dh, dw
 
 
+def floor_warning(gmem, mode, d, gmin, threshold):
+    """A gmem.min tuned on one node pins EACH node at that share under tp=2,
+    though each holds only half the weights and KV. Return a warning when the
+    floor (not the estimate) decided gmem and reserves `threshold` GiB or more
+    beyond the per-node need; None otherwise."""
+    if mode != "sized" or d.get("tp", 1) < 2 or gmem is None or gmem > gmin:
+        return None
+    excess = g2(gmin * d["total"] - d["need"])
+    if excess < threshold:
+        return None
+    return (f"[auto-gmem] WARNING: gmem.min {gmin:.2f} reserves {gmin * d['total']:.1f}GiB "
+            f"per node, {excess:.1f}GiB above the tp={d['tp']} estimate "
+            f"(need={d['need']:.2f}GiB). A floor tuned on one node over-reserves on "
+            f"both at nodes: 2 — re-derive gmem.min from `sparkyard explain`.\n")
+
+
 def install_abort(signal_mod=signal):
     """Install SIGTERM/SIGINT handlers that record the signal and forward it to
     the head once it runs (state["proc"]). Returns the shared state dict."""
@@ -939,6 +957,10 @@ def _main_cluster(env, passthrough, print_mode, state):
         if mode == "fallback":
             sys.stderr.write("[auto-gmem] NOTE: estimate exceeded free VRAM; using "
                              "clamped gmax — vLLM will trim KV at startup if needed\n")
+        warn = floor_warning(gmem, mode, dh, params.gmin,
+                             _env_num("GMEM_FLOOR_WARN_GIB", 8.0, float))
+        if warn:
+            sys.stderr.write(warn)
         gmem_str = f"{gmem:.2f}"
 
     api_host = os.environ.get("CLUSTER_API_HOST")

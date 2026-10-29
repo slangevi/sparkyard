@@ -1573,3 +1573,36 @@ def test_run_cluster_garbage_poll_output_counts_as_miss_not_death(capsys):
     proc = _PollProc()
     rc = _cluster_with_poll(proc, _SeqRun([(0, "garbage\n", "")] * 3))
     assert rc != 0 and proc.signals == [_signal.SIGTERM]
+
+
+# --- floor_warning: a single-node gmem.min floor over-reserving at tp=2 ---
+def _floor_diag(tp=2, need=23.49, total=111.51):
+    return {"tp": tp, "need": need, "total": total}
+
+
+def test_floor_warning_when_floor_pins_tp2_far_above_need():
+    w = launch.floor_warning(0.45, "sized", _floor_diag(), 0.45, 8.0)
+    assert w.startswith("[auto-gmem] WARNING: gmem.min 0.45")
+    assert "26.7GiB above the tp=2 estimate" in w  # 0.45 * 111.51 - 23.49
+
+
+def test_floor_warning_quiet_when_estimate_decides():
+    # need/total 0.30 > gmin 0.21: the estimate, not the floor, set gmem.
+    assert launch.floor_warning(0.30, "sized", _floor_diag(need=33.45), 0.21, 8.0) is None
+
+
+def test_floor_warning_quiet_under_threshold_single_node_or_fallback():
+    assert launch.floor_warning(0.28, "sized", _floor_diag(need=27.0), 0.28, 8.0) is None
+    assert launch.floor_warning(0.45, "sized", _floor_diag(tp=1), 0.45, 8.0) is None
+    assert launch.floor_warning(0.45, "fallback", _floor_diag(), 0.45, 8.0) is None
+
+
+@pytest.mark.parametrize("gmin, warns", [("0.45", True), ("0.05", False)])
+def test_main_cluster_warns_when_floor_pins_gmem(tmp_path, monkeypatch, capsys, gmin, warns):
+    # The fixture model needs ~4.5 GiB per node, so a 0.45 floor reserves ~45 more.
+    _cluster_main_env(tmp_path, monkeypatch, GMEM_MIN=gmin)
+    run = _Run([("docker image inspect", (0, "sha256:aaa\n", "")),
+                ("cat /proc/meminfo", (0, _MEMINFO_ROOMY, ""))])
+    monkeypatch.setattr(launch, "_run", run)
+    launch.main(["--print"])
+    assert ("[auto-gmem] WARNING: gmem.min" in capsys.readouterr().err) is warns

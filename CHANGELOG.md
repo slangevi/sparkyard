@@ -9,6 +9,19 @@ the prior work that inspired it.
 
 ## [Unreleased]
 
+### Added
+
+- The launcher warns (`[auto-gmem] WARNING: gmem.min …`) when a `nodes: 2`
+  model's `gmem.min` floor, not the per-node estimate, sets gmem and reserves
+  `GMEM_FLOOR_WARN_GIB` (default 8) or more beyond it. A floor tuned on one
+  node reserves that share on both nodes, though each holds only half the
+  weights and KV cache. It shows in load logs and `sparkyard explain`.
+
+### Documentation
+
+- README and `models.example.yaml`: re-derive `gmem` when a model moves to
+  `nodes: 2`.
+
 ## [1.11.0] - 2026-10-27
 
 Every component brought current, including vLLM 0.32.0, with a measured
